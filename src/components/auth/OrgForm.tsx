@@ -1,23 +1,26 @@
 import { useState, useRef } from 'react';
 import { Button } from '../common/Button';
 import { ChevronLeft, Upload, CheckCircle2, X } from 'lucide-react';
+import { signUpOrgAdmin, signUpOrgStaff } from '../../lib/authService';
 
 type OrgRole = 'admin' | 'staff';
 type AdminStep = 0 | 1 | 2 | 3 | 4;
 
 const ADMIN_STEPS = [
-  { title: 'Basic info',      subtitle: "Your organisation's contact details" },
-  { title: 'Org details',     subtitle: 'Classification and registration' },
-  { title: 'Bonafide docs',   subtitle: 'Verification documents' },
-  { title: 'Admin account',   subtitle: 'Your personal login' },
-  { title: 'Review',          subtitle: 'Everything looks right?' },
+  { title: 'Basic info',    subtitle: "Your organisation's contact details" },
+  { title: 'Org details',   subtitle: 'Classification and registration' },
+  { title: 'Bonafide docs', subtitle: 'Verification documents' },
+  { title: 'Admin account', subtitle: 'Your personal login' },
+  { title: 'Review',        subtitle: 'Everything looks right?' },
 ];
 
 export const OrgForm = ({ onBack }: { onBack: () => void }) => {
-  const [orgRole, setOrgRole]   = useState<OrgRole | null>(null);
+  const [orgRole, setOrgRole]     = useState<OrgRole | null>(null);
   const [adminStep, setAdminStep] = useState<AdminStep>(0);
   const [staffStep, setStaffStep] = useState<0 | 1>(0);
   const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [adminData, setAdminData] = useState({
@@ -36,7 +39,50 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
     if (file) setA('docName', file.name);
   };
 
-  // ── Pending / success screen ─────────────────────────────────────────────
+  // ── Staff submit ──────────────────────────────────────────────────────────
+  const handleStaffSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await signUpOrgStaff(staffData.email, staffData.password, {
+        fullName:    staffData.name,
+        orgCodeUsed: staffData.code,
+      });
+      setSubmitted(true);
+    } catch (err: any) {
+      setError(err.message ?? 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Admin final submit ────────────────────────────────────────────────────
+  const handleAdminSubmit = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await signUpOrgAdmin(adminData.adminEmail, adminData.password, {
+        fullName:   adminData.adminName,
+        orgName:    adminData.orgName,
+        orgType:    adminData.type,
+        orgSize:    adminData.size,
+        orgWebsite: adminData.website,
+        regNum:     adminData.regNum,
+      });
+      setSubmitted(true);
+    } catch (err: any) {
+      setError(err.message ?? 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const progress = ((adminStep + 1) / ADMIN_STEPS.length) * 100;
+  const goNext   = () => adminStep === 4 ? handleAdminSubmit() : setAdminStep(s => (s + 1) as AdminStep);
+  const goPrev   = () => adminStep === 0 ? setOrgRole(null)    : setAdminStep(s => (s - 1) as AdminStep);
+
+  // ── Success screen ────────────────────────────────────────────────────────
   if (submitted) {
     return (
       <div className="space-y-4 text-center py-2">
@@ -73,13 +119,13 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
     );
   }
 
-  // ── Role selector ────────────────────────────────────────────────────────
+  // ── Role selector ─────────────────────────────────────────────────────────
   if (!orgRole) {
     return (
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           {(['admin', 'staff'] as OrgRole[]).map(r => (
-            <button key={r} onClick={() => setOrgRole(r)}
+            <button key={r} onClick={() => { setError(null); setOrgRole(r); }}
               className="p-4 border border-black/10 rounded-xl hover:border-brand-primary transition-colors text-left group">
               <p className="font-bold text-brand-primary capitalize mb-1 group-hover:scale-105 transition-transform inline-block">{r}</p>
               <p className="text-[11px] text-brand-text-secondary">
@@ -93,7 +139,7 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
     );
   }
 
-  // ── Staff flow ───────────────────────────────────────────────────────────
+  // ── Staff flow ────────────────────────────────────────────────────────────
   if (orgRole === 'staff') {
     return (
       <div className="space-y-3">
@@ -118,22 +164,30 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
             </div>
           </>
         ) : (
-          <form className="space-y-3" onSubmit={e => { e.preventDefault(); setSubmitted(true); }}>
+          <form className="space-y-3" onSubmit={handleStaffSubmit}>
             {[
-              { label: 'Full name',     key: 'name',     type: 'text',     ph: 'Alex Kumar' },
-              { label: 'Work email',    key: 'email',    type: 'email',    ph: 'alex@org.com' },
-              { label: 'Password',      key: 'password', type: 'password', ph: 'Min. 8 characters' },
+              { label: 'Full name', key: 'name',     type: 'text',     ph: 'Alex Kumar' },
+              { label: 'Work email',key: 'email',    type: 'email',    ph: 'alex@org.com' },
+              { label: 'Password',  key: 'password', type: 'password', ph: 'Min. 8 characters' },
             ].map(f => (
               <div key={f.key} className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">{f.label}</label>
                 <input type={f.type} placeholder={f.ph} value={(staffData as any)[f.key]}
                   onChange={e => setS(f.key, e.target.value)}
+                  required
                   className="w-full px-4 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none" />
               </div>
             ))}
+
+            {error && (
+              <p className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+            )}
+
             <div className="flex gap-3 pt-1">
-              <Button variant="ghost" onClick={() => setStaffStep(0)} className="flex-1">Back</Button>
-              <Button className="flex-1">Submit request</Button>
+              <Button type="button" variant="ghost" onClick={() => setStaffStep(0)} className="flex-1">Back</Button>
+              <Button type="submit" className="flex-1" disabled={loading}>
+                {loading ? 'Submitting…' : 'Submit request'}
+              </Button>
             </div>
           </form>
         )}
@@ -141,11 +195,7 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
     );
   }
 
-  // ── Admin flow ───────────────────────────────────────────────────────────
-  const progress = ((adminStep + 1) / ADMIN_STEPS.length) * 100;
-  const goNext = () => adminStep === 4 ? setSubmitted(true) : setAdminStep(s => (s + 1) as AdminStep);
-  const goPrev = () => adminStep === 0 ? setOrgRole(null) : setAdminStep(s => (s - 1) as AdminStep);
-
+  // ── Admin flow ────────────────────────────────────────────────────────────
   return (
     <div className="space-y-3">
       {/* Step nav */}
@@ -220,11 +270,8 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
       {/* Step 2 — Bonafide docs */}
       {adminStep === 2 && (
         <div className="space-y-2.5">
-          {/* Hidden real file input — PDF only */}
           <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
-
           {adminData.docName ? (
-            /* Uploaded state — compact row */
             <div className="flex items-center gap-3 px-3 py-2.5 border border-brand-primary/30 bg-brand-primary/5 rounded-xl">
               <CheckCircle2 className="w-4 h-4 text-brand-primary flex-shrink-0" />
               <span className="text-sm font-medium flex-1 truncate">{adminData.docName}</span>
@@ -234,7 +281,6 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
               </button>
             </div>
           ) : (
-            /* Upload trigger — single compact row, no multiline text */
             <button type="button" onClick={() => fileRef.current?.click()}
               className="w-full flex items-center gap-3 px-3 py-2.5 border border-dashed border-black/20 rounded-xl hover:border-brand-primary transition-colors text-left">
               <Upload className="w-4 h-4 text-brand-text-secondary flex-shrink-0" />
@@ -245,7 +291,6 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
               <span className="ml-auto text-[11px] text-brand-primary font-medium flex-shrink-0">Browse</span>
             </button>
           )}
-
           <div className="space-y-1">
             <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Reg. number (confirm)</label>
             <input type="text" value={adminData.regNum} readOnly
@@ -276,9 +321,9 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
       {adminStep === 4 && (
         <div className="space-y-3 text-sm">
           {[
-            { label: 'Organisation', rows: [['Name', adminData.orgName], ['Email', adminData.email], ['Website', adminData.website]] },
-            { label: 'Details',      rows: [['Type', adminData.type], ['Size', adminData.size], ['Reg. no.', adminData.regNum]] },
-            { label: 'Admin account',rows: [['Name', adminData.adminName], ['Email', adminData.adminEmail], ['Documents', adminData.docName ? `✓ ${adminData.docName}` : 'Not uploaded']] },
+            { label: 'Organisation',  rows: [['Name', adminData.orgName], ['Email', adminData.email], ['Website', adminData.website]] },
+            { label: 'Details',       rows: [['Type', adminData.type], ['Size', adminData.size], ['Reg. no.', adminData.regNum]] },
+            { label: 'Admin account', rows: [['Name', adminData.adminName], ['Email', adminData.adminEmail], ['Documents', adminData.docName ? `✓ ${adminData.docName}` : 'Not uploaded']] },
           ].map(section => (
             <div key={section.label}>
               <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary mb-1.5">{section.label}</p>
@@ -295,13 +340,19 @@ export const OrgForm = ({ onBack }: { onBack: () => void }) => {
         </div>
       )}
 
+      {error && (
+        <p className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+      )}
+
       {/* Footer buttons */}
       <div className="flex gap-3 pt-1">
-        <Button variant="ghost" onClick={goPrev} className="flex-1">
+        <Button variant="ghost" onClick={goPrev} className="flex-1" disabled={loading}>
           {adminStep === 0 ? 'Cancel' : 'Back'}
         </Button>
-        <Button className="flex-1" onClick={goNext}>
-          {adminStep === 4 ? 'Submit for approval' : 'Continue'}
+        <Button className="flex-1" onClick={goNext} disabled={loading}>
+          {adminStep === 4
+            ? (loading ? 'Submitting…' : 'Submit for approval')
+            : 'Continue'}
         </Button>
       </div>
     </div>

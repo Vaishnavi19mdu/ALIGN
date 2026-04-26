@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate, Link } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
 import { LandingPage } from './pages/landing/LandingPage';
@@ -16,9 +16,11 @@ import { ArrowLeft } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { OrgAdminDashboard } from './pages/dashboard/OrgAdminDashboard';
 import { OrgStaffDashboard } from './pages/dashboard/OrgStaffDashboard';
+import { SuperAdminDashboard } from './pages/dashboard/SuperAdminDashboard';
+import { useAuth } from './context/AuthContext';
+import { signIn } from './lib/authService';
 
-// Routes that have their own inner sidebar — hide the global one
-const ORG_ROUTES = ['/org-admin', '/org-staff'];
+const ORG_ROUTES = ['/org-admin', '/org-staff', '/superadmin'];
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -30,13 +32,14 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (isAuthPage) {
     return (
-      <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={location.pathname}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.3 }}
+          style={{ pointerEvents: 'auto' }}
         >
           {children}
         </motion.div>
@@ -47,13 +50,14 @@ function AppLayout({ children }: { children: React.ReactNode }) {
   if (isDemoPage) {
     return (
       <div className="bg-brand-background min-h-screen">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
+            style={{ pointerEvents: 'auto' }}
           >
             {children}
           </motion.div>
@@ -62,10 +66,9 @@ function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Org pages — skip global sidebar & topbar, render full width
   if (isOrgPage) {
     return (
-      <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={location.pathname}
           initial={{ opacity: 0 }}
@@ -73,6 +76,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.3 }}
           className="bg-brand-background min-h-screen"
+          style={{ pointerEvents: 'auto' }}
         >
           {children}
         </motion.div>
@@ -82,12 +86,10 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex bg-brand-background min-h-screen relative overflow-x-hidden">
-      {/* Desktop Sidebar */}
       <div className="hidden lg:block">
         <Sidebar />
       </div>
 
-      {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
           <>
@@ -131,59 +133,93 @@ function AppLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
-const LoginPage = () => (
-  <div className="min-h-screen flex items-center justify-center bg-brand-background px-4 relative">
-    <div className="absolute top-8 left-8">
-      <Link to="/">
-        <Button variant="ghost" size="sm" className="gap-2">
-          <ArrowLeft className="w-4 h-4" /> Back to Home
-        </Button>
-      </Link>
-    </div>
-    <div className="w-full max-w-md space-y-8 text-center">
-      <div className="flex justify-center mb-8">
+const LoginPage = () => {
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError]       = useState<string | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const navigate = useNavigate();
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const { profile } = await signIn(email, password);
+      if (profile.isAdmin) {
+        navigate('/superadmin');
+      } else if (profile.role === 'org_admin') {
+        profile.status === 'approved' ? navigate('/org-admin') : setError('Your account is pending superadmin approval.');
+      } else if (profile.role === 'org_staff') {
+        profile.status === 'approved' ? navigate('/org-staff') : setError('Your account is pending admin approval.');
+      } else {
+        navigate('/volunteer');
+      }
+    } catch {
+      setError('Invalid email or password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-brand-background px-4 relative">
+      <div className="absolute top-8 left-8">
         <Link to="/">
-          <Logo isDark className="scale-125" />
+          <Button variant="ghost" size="sm" className="gap-2">
+            <ArrowLeft className="w-4 h-4" /> Back to Home
+          </Button>
         </Link>
       </div>
-      <div className="bg-white p-8 rounded-2xl shadow-xl border border-black/5 text-left">
-        <h2 className="text-2xl font-heading mb-8 text-center">Login to your account</h2>
-        <form className="space-y-6" onSubmit={e => e.preventDefault()}>
-          <div className="space-y-2">
-            <label className="text-xs font-bold uppercase text-brand-text-secondary">Email Address</label>
-            <input type="email" placeholder="sarah@impact.org" className="w-full px-4 py-3 rounded-xl bg-brand-background/50 border border-transparent focus:border-brand-primary focus:bg-white outline-none transition-all" />
-          </div>
-          <div className="space-y-2">
-            <label className="text-xs font-bold uppercase text-brand-text-secondary">Password</label>
-            <input type="password" placeholder="••••••••" className="w-full px-4 py-3 rounded-xl bg-brand-background/50 border border-transparent focus:border-brand-primary focus:bg-white outline-none transition-all" />
-          </div>
-          <button className="w-full py-4 bg-brand-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity">Sign In</button>
-        </form>
-        <p className="mt-8 text-sm text-brand-text-secondary">
-          Don't have an account? <a href="/signup" className="text-brand-primary font-bold">Register today</a>
-        </p>
-
-        {/* ── DEV SHORTCUTS — remove before going to production ── */}
-        <div className="mt-6 pt-6 border-t border-black/5">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary mb-3">Dev shortcuts</p>
-          <div className="grid grid-cols-3 gap-2">
-            <Link to="/dashboard">
-              <Button variant="ghost" size="sm" className="w-full text-xs">Super Admin →</Button>
-            </Link>
-            <Link to="/org-admin">
-              <Button variant="ghost" size="sm" className="w-full text-xs">Org Admin →</Button>
-            </Link>
-            <Link to="/org-staff">
-              <Button variant="ghost" size="sm" className="w-full text-xs">Org Staff →</Button>
-            </Link>
-          </div>
+      <div className="w-full max-w-md space-y-8 text-center">
+        <div className="flex justify-center mb-8">
+          <Link to="/"><Logo isDark className="scale-125" /></Link>
         </div>
-        {/* ── END DEV SHORTCUTS ── */}
-
+        <div className="bg-white p-8 rounded-2xl shadow-xl border border-black/5 text-left">
+          <h2 className="text-2xl font-heading mb-8 text-center">Login to your account</h2>
+          <form className="space-y-6" onSubmit={handleLogin}>
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase text-brand-text-secondary">Email Address</label>
+              <input
+                type="email"
+                placeholder="sarah@impact.org"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="w-full px-4 py-3 rounded-xl bg-brand-background/50 border border-transparent focus:border-brand-primary focus:bg-white outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase text-brand-text-secondary">Password</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="w-full px-4 py-3 rounded-xl bg-brand-background/50 border border-transparent focus:border-brand-primary focus:bg-white outline-none transition-all"
+              />
+            </div>
+            {error && (
+              <p className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-brand-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-60"
+            >
+              {loading ? 'Signing in…' : 'Sign In'}
+            </button>
+          </form>
+          <p className="mt-8 text-sm text-brand-text-secondary">
+            Don't have an account?{' '}
+            <a href="/signup" className="text-brand-primary font-bold">Register today</a>
+          </p>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const SignupPage = () => (
   <div className="min-h-screen flex items-center justify-center bg-brand-background py-12 px-4 relative">
@@ -202,7 +238,8 @@ const SignupPage = () => (
       </div>
       <FlipCardSignup />
       <p className="mt-12 text-sm text-brand-text-secondary">
-        Already have an account? <a href="/login" className="text-brand-primary font-bold">Sign in here</a>
+        Already have an account?{' '}
+        <a href="/login" className="text-brand-primary font-bold">Sign in here</a>
       </p>
     </div>
   </div>
@@ -218,6 +255,7 @@ export default function App() {
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/demo" element={<DemoDashboard />} />
 
+          <Route path="/superadmin" element={<SuperAdminDashboard />} />
           <Route path="/dashboard" element={<AdminDashboard />} />
           <Route path="/tasks" element={<AdminDashboard />} />
           <Route path="/allocation" element={<AllocationView />} />
