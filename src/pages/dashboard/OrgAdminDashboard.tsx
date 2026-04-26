@@ -1,17 +1,49 @@
-import { useState, type ReactElement } from 'react';
+import { useState, useEffect, type ReactElement } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, GitBranch, Users, BarChart2,
   ScrollText, FileDown, Sparkles, Plus, ToggleLeft, ToggleRight,
   Download, LogOut, X, Settings, CheckCircle2, Save, Wifi, WifiOff,
+  UserCheck, Bell, ChevronDown, Loader2,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import {
+  collection, query, where, onSnapshot,
+  doc, updateDoc, serverTimestamp, addDoc, orderBy, limit,
+} from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Logo } from '../../components/common/Logo';
 import { useAuth } from '../../context/AuthContext';
 import { logOut } from '../../lib/authService';
 import { useNavigate } from 'react-router-dom';
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+interface PendingStaff {
+  uid: string;
+  fullName: string;
+  email: string;
+  orgCodeUsed: string;
+  createdAt: any;
+}
+
+interface OrgStaffMember {
+  uid: string;
+  fullName: string;
+  email: string;
+  canCreateTask: boolean;
+  status: string;
+  tasksCreated?: number;
+}
+
+interface ActivityLogEntry {
+  id: string;
+  user: string;
+  action: string;
+  createdAt: any;
+}
 
 // ─── Dummy data ────────────────────────────────────────────────────────────────
 
@@ -73,7 +105,7 @@ const statusStyle = (s: string) => {
 
 const pieColors = ['#7c3aed', '#f59e0b', '#10b981', '#6b7280'];
 
-// ─── PDF Builder ───────────────────────────────────────────────────────────────
+// ─── PDF Builder ──────────────────────────────────────────────────────────────
 
 const buildPDF = (title: string): string => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -102,71 +134,8 @@ const buildPDF = (title: string): string => {
     setColor('#7c3aed','fill'); doc.rect(MARGIN,y,CONTENT_W,7,'F');
     doc.setFont('helvetica','bold'); doc.setFontSize(8.5); setColor('#ffffff','text'); doc.text(text,MARGIN+3,y+5); return y+12;
   };
-  const kpiRow = (items: {label:string;value:string;sub:string}[], y: number) => {
-    const boxW = CONTENT_W/items.length-2;
-    items.forEach((item,i) => {
-      const x = MARGIN+i*(boxW+2); setColor('#f5f3ff','fill'); doc.roundedRect(x,y,boxW,20,2,2,'F');
-      doc.setFont('helvetica','bold'); doc.setFontSize(14); setColor('#7c3aed','text'); doc.text(item.value,x+boxW/2,y+10,{align:'center'});
-      doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#374151','text'); doc.text(item.label,x+boxW/2,y+15,{align:'center'});
-      setColor('#6b7280','text'); doc.text(item.sub,x+boxW/2,y+19,{align:'center'});
-    }); return y+26;
-  };
-  const drawTable = (headers: string[], rows: string[][], colWidths: number[], y: number) => {
-    const ROW_H=8; setColor('#7c3aed','fill'); doc.rect(MARGIN,y,CONTENT_W,ROW_H,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); setColor('#ffffff','text');
-    let x=MARGIN+2; headers.forEach((h,i)=>{doc.text(h,x,y+5.5);x+=colWidths[i];}); y+=ROW_H;
-    rows.forEach((row,ri)=>{
-      setColor(ri%2===0?'#f9fafb':'#ffffff','fill'); doc.rect(MARGIN,y,CONTENT_W,ROW_H,'F');
-      doc.setFont('helvetica','normal'); doc.setFontSize(7.5); x=MARGIN+2;
-      row.forEach((cell,ci)=>{
-        const isHighlight=cell==='Emergency'||cell==='Unassigned';
-        setColor(isHighlight?'#dc2626':'#374151','text'); doc.text(cell,x,y+5.5); x+=colWidths[ci];
-      }); y+=ROW_H;
-    });
-    setColor('#e5e7eb','draw'); doc.setLineWidth(0.2); doc.rect(MARGIN,y-rows.length*ROW_H-ROW_H,CONTENT_W,(rows.length+1)*ROW_H,'D'); return y+4;
-  };
-  const barRow = (label:string,value:number,max:number,color:string,y:number)=>{
-    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); setColor('#374151','text'); doc.text(label,MARGIN,y+3.5);
-    const barX=MARGIN+35; const barW=CONTENT_W-50; setColor('#e5e7eb','fill'); doc.roundedRect(barX,y,barW,5,1,1,'F');
-    setColor(color,'fill'); doc.roundedRect(barX,y,(value/max)*barW,5,1,1,'F');
-    setColor('#374151','text'); doc.text(`${value}`,barX+barW+3,y+3.5); return y+9;
-  };
-  drawHeader(); drawFooter(); let y=44;
-  if (title==='Task Summary') {
-    y=sectionHeading('OVERVIEW',y);
-    y=kpiRow([{label:'Total Tasks',value:'38',sub:'+4 this week'},{label:'Open',value:'12',sub:'needs action'},{label:'In Progress',value:'9',sub:'active'},{label:'Completed',value:'17',sub:'94% on time'}],y);
-    y=kpiRow([{label:'Emergency',value:'2',sub:'critical'},{label:'High Priority',value:'7',sub:'3 unassigned'},{label:'Avg Impact',value:'83.8',sub:'score'},{label:'Unassigned',value:'3',sub:'open slots'}],y);
-    y=sectionHeading('TASK LIST',y);
-    y=drawTable(['ID','Title','Status','Impact','Assigned To','Created By'],[['T-201','Food Kit Distribution','Open','92','Unassigned','Admin'],['T-202','Community Teaching','Matching','87','Ravi M.','Staff'],['T-203','Flood Relief Ops','Emergency','99','Unassigned','Admin'],['T-204','Medical Camp Setup','In Progress','78','Priya S.','Staff'],['T-205','Tree Planting Drive','Open','63','Unassigned','Admin']],[16,52,28,16,34,28],y);
-    y=sectionHeading('COMPLETION STATS',y);
-    ['On-time completion rate : 94%','Average impact score    : 83.8','Unassigned tasks        : 3'].forEach(line=>{doc.setFont('helvetica','normal');doc.setFontSize(8);setColor('#374151','text');doc.text(line,MARGIN+3,y);y+=6;});
-  }
-  if (title==='Assignment List') {
-    y=sectionHeading('VOLUNTEER-TO-TASK MAPPING',y);
-    [{task:'Food Kit Distribution (T-201)',volunteer:'Anjali R.',skill:94,rel:88,dist:2.1,backups:'Mohan D., Sneha T.'},{task:'Community Teaching (T-202)',volunteer:'Ravi M.',skill:89,rel:92,dist:3.4,backups:'Aditi K.'},{task:'Medical Camp Setup (T-204)',volunteer:'Priya S.',skill:97,rel:85,dist:1.8,backups:'Suresh P., Lakshmi V.'}].forEach(a=>{
-      setColor('#f9fafb','fill'); doc.roundedRect(MARGIN,y,CONTENT_W,32,2,2,'F'); setColor('#e5e7eb','draw'); doc.setLineWidth(0.2); doc.roundedRect(MARGIN,y,CONTENT_W,32,2,2,'D');
-      doc.setFont('helvetica','bold'); doc.setFontSize(9); setColor('#1f2937','text'); doc.text(a.task,MARGIN+4,y+8);
-      doc.setFont('helvetica','normal'); doc.setFontSize(8); setColor('#6b7280','text'); doc.text('Assigned → ',MARGIN+4,y+15);
-      doc.setFont('helvetica','bold'); setColor('#7c3aed','text'); doc.text(a.volunteer,MARGIN+25,y+15);
-      [{label:'Skill Match',val:`${a.skill}%`,color:'#7c3aed'},{label:'Reliability',val:`${a.rel}%`,color:'#10b981'},{label:'Distance',val:`${a.dist} km`,color:'#3b82f6'}].forEach((m,mi)=>{
-        const mx=MARGIN+4+mi*50; doc.setFont('helvetica','bold'); doc.setFontSize(11); const [r,g,b]=hex(m.color); doc.setTextColor(r,g,b); doc.text(m.val,mx,y+24);
-        doc.setFont('helvetica','normal'); doc.setFontSize(6.5); setColor('#6b7280','text'); doc.text(m.label,mx,y+29);
-      });
-      doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#6b7280','text'); doc.text(`Backups: ${a.backups}`,MARGIN+4+3*50,y+24); y+=37;
-    });
-    y=sectionHeading('UNASSIGNED TASKS',y);
-    y=drawTable(['Task ID','Title','Impact Score','Status'],[['T-201','Food Kit Distribution','92','Open'],['T-203','Flood Relief Ops','99','Emergency'],['T-205','Tree Planting Drive','63','Open']],[20,80,36,38],y);
-  }
-  if (title==='Analytics Snapshot') {
-    y=sectionHeading('SUMMARY KPIs',y);
-    y=kpiRow([{label:'Active Volunteers',value:'124',sub:'+18 new'},{label:'Completed Tasks',value:'261',sub:'94% on time'},{label:'Weekly Avg Rate',value:'70%',sub:'completion'},{label:'Best Day',value:'Sat',sub:'91%'}],y);
-    y=sectionHeading('TASK COMPLETION RATE — THIS WEEK',y);
-    [{label:'Monday',val:62},{label:'Tuesday',val:78},{label:'Wednesday',val:55},{label:'Thursday',val:89},{label:'Friday',val:72},{label:'Saturday',val:91},{label:'Sunday',val:44}].forEach(d=>{y=barRow(d.label,d.val,100,'#7c3aed',y);});
-    y+=2; y=sectionHeading('VOLUNTEER ACTIVITY BY CATEGORY',y);
-    [{label:'Medical',val:34},{label:'Teaching',val:28},{label:'Relief',val:22},{label:'Other',val:16}].forEach((d,i)=>{y=barRow(d.label,d.val,100,['#7c3aed','#f59e0b','#10b981','#6b7280'][i],y);});
-    y+=2; y=sectionHeading('STAFF PERFORMANCE',y);
-    [{label:'Meena Nair',val:12},{label:'Karthik Rajan',val:8},{label:'Divya Pillai',val:15},{label:'Arjun Das',val:3}].forEach(d=>{y=barRow(d.label,d.val,20,'#7c3aed',y);});
-  }
+  void sectionHeading; // suppress unused warning
+  drawHeader(); drawFooter();
   return doc.output('datauristring');
 };
 
@@ -188,15 +157,12 @@ const PDFViewer = ({ title, dataUri, onClose }: { title: string; dataUri: string
           exit={{ scale: 0.92, opacity: 0, y: 20 }} transition={{ type: 'spring', stiffness: 320, damping: 28 }}
           onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/8 bg-brand-background shrink-0">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Preview</p>
-              <p className="text-sm font-heading font-bold text-brand-text-primary">{title}</p>
-            </div>
+            <p className="text-sm font-heading font-bold text-brand-text-primary">{title}</p>
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={handleDownload} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
                 <Download className="w-3 h-3" /> Download PDF
               </Button>
-              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/8 transition-colors text-brand-text-secondary hover:text-brand-text-primary">
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/8 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -207,6 +173,237 @@ const PDFViewer = ({ title, dataUri, onClose }: { title: string; dataUri: string
         </motion.div>
       </motion.div>
     </AnimatePresence>
+  );
+};
+
+// ─── Staff Requests Panel ─────────────────────────────────────────────────────
+
+const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
+  const [pending,  setPending]  = useState<PendingStaff[]>([]);
+  const [resolved, setResolved] = useState<{ uid: string; name: string; action: 'approved' | 'rejected' }[]>([]);
+  const [acting,   setActing]   = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [loading,  setLoading]  = useState(true);
+
+  useEffect(() => {
+    if (!orgCode) return;
+    const q = query(
+      collection(db, 'users'),
+      where('orgCodeUsed', '==', orgCode),
+      where('status', '==', 'pending'),
+    );
+    return onSnapshot(q, snap => {
+      setPending(snap.docs.map(d => ({ uid: d.id, ...d.data() } as PendingStaff)));
+      setLoading(false);
+    });
+  }, [orgCode]);
+
+  const approve = async (s: PendingStaff) => {
+    setActing(s.uid);
+    await updateDoc(doc(db, 'users', s.uid), { status: 'approved', resolvedAt: serverTimestamp() });
+    setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'approved' }]);
+    setActing(null);
+  };
+
+  const reject = async (s: PendingStaff) => {
+    setActing(s.uid);
+    await updateDoc(doc(db, 'users', s.uid), { status: 'rejected', resolvedAt: serverTimestamp() });
+    setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'rejected' }]);
+    setActing(null);
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20 text-brand-text-secondary text-sm">
+      Loading requests…
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <h2 className="text-base font-heading font-bold">Staff Join Requests</h2>
+        {pending.length > 0 && (
+          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-600">{pending.length} pending</span>
+        )}
+      </div>
+
+      {pending.length === 0 && resolved.length === 0 && (
+        <Card className="p-10 flex flex-col items-center gap-3 text-center">
+          <UserCheck className="w-10 h-10 text-green-500" />
+          <p className="font-semibold text-brand-text-primary">All caught up!</p>
+          <p className="text-xs text-brand-text-secondary">No pending staff requests for your org code.</p>
+        </Card>
+      )}
+
+      <div className="space-y-3">
+        {pending.map((s, i) => (
+          <motion.div key={s.uid} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
+            <Card className="overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-brand-background/30 transition-colors text-left"
+                onClick={() => setExpanded(expanded === s.uid ? null : s.uid)}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 text-[11px] font-bold text-brand-primary">
+                    {s.fullName.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm text-brand-text-primary">{s.fullName}</p>
+                    <p className="text-[11px] text-brand-text-secondary">{s.email}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0 ml-4">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-600 uppercase hidden sm:inline">Pending</span>
+                  <ChevronDown className={`w-4 h-4 text-brand-text-secondary transition-transform ${expanded === s.uid ? 'rotate-180' : ''}`} />
+                </div>
+              </button>
+
+              <AnimatePresence>
+                {expanded === s.uid && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="px-5 pb-5 border-t border-black/5 pt-4 space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { label: 'Full Name', val: s.fullName },
+                          { label: 'Email',     val: s.email },
+                          { label: 'Code Used', val: s.orgCodeUsed },
+                          { label: 'Requested', val: s.createdAt?.toDate?.()?.toLocaleDateString('en-IN') ?? 'Just now' },
+                        ].map(f => (
+                          <div key={f.label} className="bg-brand-background rounded-lg px-3 py-2">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">{f.label}</p>
+                            <p className="text-sm font-medium text-brand-text-primary mt-0.5 truncate">{f.val}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-3 pt-1">
+                        <Button variant="ghost" size="sm"
+                          className="flex-1 gap-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 border border-red-100"
+                          onClick={() => reject(s)} disabled={acting === s.uid}>
+                          <X className="w-3.5 h-3.5" /> Reject
+                        </Button>
+                        <Button size="sm" className="flex-1 gap-1.5"
+                          onClick={() => approve(s)} disabled={acting === s.uid}>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {acting === s.uid ? 'Saving…' : 'Approve'}
+                        </Button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {resolved.length > 0 && (
+        <>
+          <h2 className="text-base font-heading font-bold">Resolved this session</h2>
+          <div className="space-y-2">
+            {resolved.map(r => (
+              <Card key={r.uid} className="px-5 py-3 flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${r.action === 'approved' ? 'bg-green-50' : 'bg-red-50'}`}>
+                  {r.action === 'approved'
+                    ? <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    : <X className="w-4 h-4 text-red-500" />}
+                </div>
+                <p className="font-semibold text-sm text-brand-text-primary flex-1">{r.name}</p>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${r.action === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                  {r.action}
+                </span>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ─── Task Permissions Panel (fetches real org staff from Firestore) ─────────────
+
+const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
+  const [staffMembers, setStaffMembers] = useState<OrgStaffMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!orgCode) return;
+    const q = query(
+      collection(db, 'users'),
+      where('orgCodeUsed', '==', orgCode),
+      where('status', '==', 'approved'),
+      where('role', '==', 'org_staff'),
+    );
+    return onSnapshot(q, snap => {
+      setStaffMembers(snap.docs.map(d => ({
+        uid: d.id,
+        fullName: d.data().fullName ?? 'Unknown',
+        email: d.data().email ?? '',
+        canCreateTask: d.data().canCreateTask === true,
+        status: d.data().status ?? 'approved',
+      })));
+      setLoading(false);
+    });
+  }, [orgCode]);
+
+  const togglePermission = async (member: OrgStaffMember) => {
+    setToggling(member.uid);
+    await updateDoc(doc(db, 'users', member.uid), {
+      canCreateTask: !member.canCreateTask,
+    });
+    setToggling(null);
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 py-6 text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading staff…
+    </div>
+  );
+
+  if (staffMembers.length === 0) return (
+    <div className="py-6 text-center text-sm text-brand-text-secondary">
+      No approved staff members found in your organisation.
+    </div>
+  );
+
+  return (
+    <div className="space-y-2">
+      {staffMembers.map((member, i) => (
+        <motion.div key={member.uid} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-brand-background border border-black/5 hover:border-brand-primary/20 transition-colors">
+            <div className="w-9 h-9 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary shrink-0">
+              {member.fullName.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm text-brand-text-primary truncate">{member.fullName}</p>
+              <p className="text-[11px] text-brand-text-secondary truncate">{member.email}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={`text-[10px] font-bold uppercase tracking-wide ${member.canCreateTask ? 'text-brand-primary' : 'text-brand-text-secondary'}`}>
+                {member.canCreateTask ? 'Enabled' : 'Disabled'}
+              </span>
+              <button
+                onClick={() => togglePermission(member)}
+                disabled={toggling === member.uid}
+                className="relative focus:outline-none"
+              >
+                {toggling === member.uid
+                  ? <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
+                  : member.canCreateTask
+                    ? <ToggleRight className="w-7 h-7 text-brand-primary transition-colors" />
+                    : <ToggleLeft  className="w-7 h-7 text-brand-text-secondary/40 transition-colors" />
+                }
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      ))}
+    </div>
   );
 };
 
@@ -260,39 +457,84 @@ const DashboardHome = () => (
   </div>
 );
 
-const TasksPage = () => (
-  <div className="space-y-4">
-    <div className="flex items-center justify-between">
-      <h2 className="text-base font-heading font-bold">All Tasks</h2>
-      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Plus className="w-3 h-3" /> Create Task</Button>
-    </div>
-    <Card className="overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Task','Impact','Status','Assigned Volunteer','Created By','Actions'].map(h => (
-                <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5 text-brand-text-primary">
-            {tasks.map(t => (
-              <tr key={t.id} className="hover:bg-brand-background/30 transition-colors">
-                <td className="px-4 py-3"><div className="font-semibold text-sm">{t.title}</div><div className="text-[10px] text-brand-text-secondary">{t.id}</div></td>
-                <td className="px-4 py-3"><span className="text-sm font-bold text-brand-primary">{t.impact}</span></td>
-                <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span></td>
-                <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.assignedTo}</td>
-                <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.createdBy}</td>
-                <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">Edit</Button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+// ─── Tasks Page — now includes Task Permissions section ───────────────────────
+
+const TasksPage = ({ orgCode }: { orgCode: string }) => {
+  const [showPermissions, setShowPermissions] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      {/* Tasks table */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-heading font-bold">All Tasks</h2>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost"
+              onClick={() => setShowPermissions(v => !v)}
+              className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+              <ToggleRight className="w-3.5 h-3.5" /> Task Permissions
+            </Button>
+            <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+              <Plus className="w-3 h-3" /> Create Task
+            </Button>
+          </div>
+        </div>
+        <Card className="overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-brand-background/50 border-b border-black/5">
+                  {['Task','Impact','Status','Assigned Volunteer','Created By','Actions'].map(h => (
+                    <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-black/5 text-brand-text-primary">
+                {tasks.map(t => (
+                  <tr key={t.id} className="hover:bg-brand-background/30 transition-colors">
+                    <td className="px-4 py-3"><div className="font-semibold text-sm">{t.title}</div><div className="text-[10px] text-brand-text-secondary">{t.id}</div></td>
+                    <td className="px-4 py-3"><span className="text-sm font-bold text-brand-primary">{t.impact}</span></td>
+                    <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span></td>
+                    <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.assignedTo}</td>
+                    <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.createdBy}</td>
+                    <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">Edit</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
-    </Card>
-  </div>
-);
+
+      {/* Task Permissions collapsible panel */}
+      <AnimatePresence>
+        {showPermissions && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <Card className="p-5 space-y-4 border border-brand-primary/20">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-heading font-bold text-brand-text-primary">Task Creation Permissions</h3>
+                  <p className="text-[11px] text-brand-text-secondary mt-0.5">
+                    Toggle which staff members can create new tasks in your organisation.
+                  </p>
+                </div>
+                <button onClick={() => setShowPermissions(false)}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 transition-colors text-brand-text-secondary">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <TaskPermissionsPanel orgCode={orgCode} />
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
 
 const AllocationPage = () => (
   <div className="space-y-4">
@@ -334,48 +576,116 @@ const AllocationPage = () => (
   </div>
 );
 
-const StaffManagementPage = () => {
-  const [perms, setPerms] = useState<Record<string, boolean>>(
-    Object.fromEntries(staffList.map(s => [s.name, s.canCreateTask]))
+const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
+  const [members, setMembers]   = useState<OrgStaffMember[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!orgCode) return;
+    const q = query(
+      collection(db, 'users'),
+      where('orgCodeUsed', '==', orgCode),
+      where('status', '==', 'approved'),
+      where('role', '==', 'org_staff'),
+    );
+    return onSnapshot(q, snap => {
+      setMembers(snap.docs.map(d => ({
+        uid: d.id,
+        fullName:      d.data().fullName      ?? 'Unknown',
+        email:         d.data().email         ?? '',
+        canCreateTask: d.data().canCreateTask === true,
+        status:        d.data().status        ?? 'approved',
+        tasksCreated:  d.data().tasksCreated  ?? 0,
+      })));
+      setLoading(false);
+    });
+  }, [orgCode]);
+
+  const togglePerm = async (m: OrgStaffMember) => {
+    setToggling(m.uid);
+    const next = !m.canCreateTask;
+    await updateDoc(doc(db, 'users', m.uid), { canCreateTask: next });
+    // Write activity log entry
+    await addDoc(collection(db, 'activityLogs'), {
+      orgCode,
+      user:      'Admin',
+      action:    next
+        ? `Gave task creation permission to ${m.fullName}`
+        : `Revoked task creation for ${m.fullName}`,
+      createdAt: serverTimestamp(),
+    });
+    setToggling(null);
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 py-20 justify-center text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading staff…
+    </div>
   );
+
   return (
     <div className="space-y-4">
-      <h2 className="text-base font-heading font-bold">Staff Management</h2>
-      <Card className="overflow-hidden">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Name','Role','Tasks Created','Can Create Tasks',''].map(h => (
-                <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5 text-brand-text-primary">
-            {staffList.map(s => (
-              <tr key={s.name} className="hover:bg-brand-background/30 transition-colors">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary">
-                      {s.name.split(' ').map(w => w[0]).join('')}
-                    </div>
-                    <span className="font-semibold text-sm">{s.name}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-sm text-brand-text-secondary">{s.role}</td>
-                <td className="px-4 py-3 text-sm font-semibold">{s.tasks}</td>
-                <td className="px-4 py-3">
-                  <button onClick={() => setPerms(p => ({ ...p, [s.name]: !p[s.name] }))} className="flex items-center gap-2 text-xs font-medium transition-colors">
-                    {perms[s.name]
-                      ? <><ToggleRight className="w-6 h-6 text-brand-primary" /><span className="text-brand-primary">Enabled</span></>
-                      : <><ToggleLeft  className="w-6 h-6 text-brand-text-secondary" /><span className="text-brand-text-secondary">Disabled</span></>}
-                  </button>
-                </td>
-                <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">View</Button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-heading font-bold">Staff Management</h2>
+        <span className="text-xs text-brand-text-secondary">{members.length} member{members.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      {members.length === 0 ? (
+        <Card className="p-10 flex flex-col items-center gap-3 text-center">
+          <Users className="w-10 h-10 text-brand-text-secondary/40" />
+          <p className="font-semibold text-brand-text-primary">No approved staff yet</p>
+          <p className="text-xs text-brand-text-secondary">Approve staff requests and they will appear here.</p>
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-brand-background/50 border-b border-black/5">
+                  {['Name','Email','Tasks Created','Can Create Tasks',''].map(h => (
+                    <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-black/5 text-brand-text-primary">
+                {members.map((m, i) => (
+                  <motion.tr key={m.uid} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                    className="hover:bg-brand-background/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary shrink-0">
+                          {m.fullName.split(' ').map((w: string) => w[0]).join('').slice(0,2).toUpperCase()}
+                        </div>
+                        <span className="font-semibold text-sm">{m.fullName}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-brand-text-secondary">{m.email}</td>
+                    <td className="px-4 py-3 text-sm font-semibold">{m.tasksCreated ?? 0}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => togglePerm(m)}
+                        disabled={toggling === m.uid}
+                        className="flex items-center gap-2 text-xs font-medium transition-colors"
+                      >
+                        {toggling === m.uid
+                          ? <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
+                          : m.canCreateTask
+                            ? <><ToggleRight className="w-6 h-6 text-brand-primary" /><span className="text-brand-primary">Enabled</span></>
+                            : <><ToggleLeft className="w-6 h-6 text-brand-text-secondary" /><span className="text-brand-text-secondary">Disabled</span></>
+                        }
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">View</Button>
+                    </td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 };
@@ -426,45 +736,89 @@ const AnalyticsPage = () => {
             </div>
           </div>
         </Card>
-        <Card className="p-5 lg:col-span-2">
-          <p className="text-xs font-bold uppercase tracking-widest text-brand-text-secondary mb-4">Staff Performance</p>
-          <div className="space-y-3">
-            {staffList.map(s => (
-              <div key={s.name} className="flex items-center gap-4">
-                <span className="text-sm w-28 shrink-0 font-medium text-brand-text-primary">{s.name.split(' ')[0]}</span>
-                <div className="flex-1 h-2 bg-black/5 rounded-full overflow-hidden">
-                  <motion.div className="h-full bg-brand-primary rounded-full" style={{ width: 0 }}
-                    animate={{ width: `${(s.tasks/20)*100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
-                </div>
-                <span className="text-xs font-bold text-brand-text-primary w-16 text-right">{s.tasks} tasks</span>
-              </div>
-            ))}
-          </div>
-        </Card>
       </div>
     </div>
   );
 };
 
-const ActivityLogPage = () => (
-  <div className="space-y-4">
-    <h2 className="text-base font-heading font-bold">Activity Log</h2>
-    <Card className="divide-y divide-black/5">
-      {activityLog.map((e, i) => (
-        <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i*0.05 }}
-          className="flex items-start gap-4 px-5 py-4">
-          <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <span className="text-[10px] font-bold text-brand-primary">{e.user.split(' ').map(w=>w[0]).join('').slice(0,2)}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-brand-text-primary"><span className="font-semibold">{e.user}</span> — {e.action}</p>
-            <p className="text-[11px] text-brand-text-secondary mt-0.5">{e.time}</p>
-          </div>
-        </motion.div>
-      ))}
-    </Card>
-  </div>
-);
+const ActivityLogPage = ({ orgCode }: { orgCode: string }) => {
+  const [entries, setEntries] = useState<ActivityLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!orgCode) return;
+    const q = query(
+      collection(db, 'activityLogs'),
+      where('orgCode', '==', orgCode),
+      orderBy('createdAt', 'desc'),
+      limit(50),
+    );
+    return onSnapshot(q, snap => {
+      setEntries(snap.docs.map(d => ({
+        id:        d.id,
+        user:      d.data().user      ?? 'System',
+        action:    d.data().action    ?? '',
+        createdAt: d.data().createdAt ?? null,
+      })));
+      setLoading(false);
+    });
+  }, [orgCode]);
+
+  const formatTime = (ts: any): string => {
+    if (!ts?.toDate) return '—';
+    const d = ts.toDate() as Date;
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+    if (isToday) return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    if (isYesterday) return 'Yesterday';
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 py-20 justify-center text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading activity…
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-heading font-bold">Activity Log</h2>
+        <span className="text-xs text-brand-text-secondary">{entries.length} entries</span>
+      </div>
+
+      {entries.length === 0 ? (
+        <Card className="p-10 flex flex-col items-center gap-3 text-center">
+          <ScrollText className="w-10 h-10 text-brand-text-secondary/40" />
+          <p className="font-semibold text-brand-text-primary">No activity yet</p>
+          <p className="text-xs text-brand-text-secondary">Actions taken in your organisation will appear here.</p>
+        </Card>
+      ) : (
+        <Card className="divide-y divide-black/5">
+          {entries.map((e, i) => (
+            <motion.div key={e.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
+              className="flex items-start gap-4 px-5 py-4">
+              <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                <span className="text-[10px] font-bold text-brand-primary">
+                  {e.user.split(' ').map((w: string) => w[0]).join('').slice(0,2).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-brand-text-primary">
+                  <span className="font-semibold">{e.user}</span> — {e.action}
+                </p>
+                <p className="text-[11px] text-brand-text-secondary mt-0.5">{formatTime(e.createdAt)}</p>
+              </div>
+            </motion.div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+};
 
 const ReportsPage = () => {
   const [preview, setPreview] = useState<{ title: string; dataUri: string } | null>(null);
@@ -500,26 +854,30 @@ const ReportsPage = () => {
   );
 };
 
-// ─── Settings Page ─────────────────────────────────────────────────────────────
+// ─── Settings — org code lives here only ──────────────────────────────────────
 
 const SettingsPage = ({ profile }: { profile: any }) => {
   const [notifOn, setNotifOn] = useState(true);
   const [saved,   setSaved]   = useState(false);
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
-
   return (
     <div className="space-y-4">
-
-      {/* Org Code */}
-      <Card className="p-5 space-y-2 border border-brand-primary/20 bg-brand-primary/5">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Your Organisation Code</p>
-        <p className="text-[11px] text-brand-text-secondary">Share this with your staff so they can join your organisation.</p>
+      {/* Org Code card — prominently at top of Settings */}
+      <Card className="p-5 space-y-3 border border-brand-primary/25 bg-gradient-to-br from-brand-primary/5 to-brand-accent/5">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Your Organisation Code</p>
+          <p className="text-[11px] text-brand-text-secondary mt-0.5">Share this with your staff so they can join your organisation.</p>
+        </div>
         {profile?.orgCode ? (
-          <div className="flex items-center gap-3 mt-1">
-            <span className="font-mono text-2xl font-bold text-brand-primary tracking-widest">{profile.orgCode}</span>
-            <button onClick={() => navigator.clipboard.writeText(profile.orgCode)}
-              className="px-3 py-1.5 rounded-lg bg-brand-primary text-white text-xs font-bold hover:opacity-90 transition-opacity">
-              Copy
+          <div className="flex items-center gap-4">
+            <div className="flex-1 bg-white rounded-xl px-4 py-3 border border-brand-primary/20 flex items-center gap-3">
+              <span className="font-mono text-2xl font-bold text-brand-primary tracking-[0.2em]">{profile.orgCode}</span>
+            </div>
+            <button
+              onClick={() => navigator.clipboard.writeText(profile.orgCode)}
+              className="px-4 py-3 rounded-xl bg-brand-primary text-white text-xs font-bold hover:opacity-90 transition-opacity shrink-0"
+            >
+              Copy Code
             </button>
           </div>
         ) : (
@@ -527,7 +885,6 @@ const SettingsPage = ({ profile }: { profile: any }) => {
         )}
       </Card>
 
-      {/* Profile */}
       <Card className="p-5 space-y-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Profile</p>
         {[
@@ -546,14 +903,6 @@ const SettingsPage = ({ profile }: { profile: any }) => {
           </div>
         ))}
       </Card>
-
-      {/* Staff permissions note */}
-      <Card className="p-5 space-y-3">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Staff Permissions</p>
-        <p className="text-xs text-brand-text-secondary">Manage individual staff task creation permissions in the <span className="font-semibold text-brand-primary">Staff Management</span> tab.</p>
-      </Card>
-
-      {/* Notifications */}
       <Card className="p-5 flex items-center justify-between">
         <div>
           <p className="text-sm font-semibold text-brand-text-primary">Notifications</p>
@@ -561,11 +910,10 @@ const SettingsPage = ({ profile }: { profile: any }) => {
         </div>
         <button onClick={() => setNotifOn(v => !v)} className="flex items-center gap-2">
           {notifOn
-            ? <><Wifi    className="w-5 h-5 text-brand-primary" /><span className="text-xs font-medium text-brand-primary">On</span></>
+            ? <><Wifi className="w-5 h-5 text-brand-primary" /><span className="text-xs font-medium text-brand-primary">On</span></>
             : <><WifiOff className="w-5 h-5 text-brand-text-secondary" /><span className="text-xs font-medium text-brand-text-secondary">Off</span></>}
         </button>
       </Card>
-
       <Button className="w-full gap-2" onClick={save}>
         {saved ? <><CheckCircle2 className="w-4 h-4" /> Saved!</> : <><Save className="w-4 h-4" /> Save Changes</>}
       </Button>
@@ -580,6 +928,7 @@ const NAV = [
   { key: 'tasks',      label: 'Tasks',            icon: ClipboardList   },
   { key: 'allocation', label: 'Allocation',       icon: GitBranch       },
   { key: 'staff',      label: 'Staff Management', icon: Users           },
+  { key: 'requests',   label: 'Staff Requests',   icon: UserCheck       },
   { key: 'analytics',  label: 'Analytics',        icon: BarChart2       },
   { key: 'log',        label: 'Activity Log',     icon: ScrollText      },
   { key: 'reports',    label: 'Reports',          icon: FileDown        },
@@ -593,96 +942,174 @@ type NavKey = typeof NAV[number]['key'];
 export const OrgAdminDashboard = () => {
   const [active, setActive] = useState<NavKey>('dashboard');
   const { profile } = useAuth();
-  const navigate    = useNavigate();
+  const navigate = useNavigate();
+
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    const orgCode = profile?.orgCode;
+    if (!orgCode) return;
+    const q = query(
+      collection(db, 'users'),
+      where('orgCodeUsed', '==', orgCode),
+      where('status', '==', 'pending'),
+    );
+    return onSnapshot(q, snap => setPendingCount(snap.size));
+  }, [profile?.orgCode]);
 
   const displayName = profile?.fullName ?? 'Org Admin';
   const initials    = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
   const orgName     = profile?.orgName ?? 'Your Organisation';
+  // Fix TS error: guarantee string for orgCode
+  const orgCode     = profile?.orgCode ?? '';
 
   const handleLogout = async () => { await logOut(); navigate('/login'); };
 
   const PageMap: Record<NavKey, ReactElement> = {
     dashboard:  <DashboardHome />,
-    tasks:      <TasksPage />,
+    tasks:      <TasksPage orgCode={orgCode} />,
     allocation: <AllocationPage />,
-    staff:      <StaffManagementPage />,
+    staff:      <StaffManagementPage orgCode={orgCode} />,
+    requests:   <StaffRequestsPage orgCode={orgCode} />,
     analytics:  <AnalyticsPage />,
-    log:        <ActivityLogPage />,
+    log:        <ActivityLogPage orgCode={orgCode} />,
     reports:    <ReportsPage />,
     settings:   <SettingsPage profile={profile} />,
   };
 
   const navLabel: Record<NavKey, string> = {
     dashboard: 'Dashboard', tasks: 'Tasks', allocation: 'Allocation',
-    staff: 'Staff Management', analytics: 'Analytics', log: 'Activity Log',
+    staff: 'Staff Management', requests: 'Staff Requests',
+    analytics: 'Analytics', log: 'Activity Log',
     reports: 'Reports', settings: 'Settings',
   };
 
   return (
-    <div className="flex h-screen bg-brand-background overflow-hidden">
+    <>
+      {/* ── Themed scrollbar styles ── */}
+      <style>{`
+        .themed-scroll {
+          scroll-behavior: smooth;
+        }
+        .themed-scroll::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .themed-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .themed-scroll::-webkit-scrollbar-thumb {
+          background: rgba(124, 58, 237, 0.25);
+          border-radius: 99px;
+          transition: background 0.2s;
+        }
+        .themed-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(124, 58, 237, 0.5);
+        }
+        .sidebar-scroll::-webkit-scrollbar {
+          width: 4px;
+        }
+        .sidebar-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .sidebar-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.15);
+          border-radius: 99px;
+        }
+        .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+      `}</style>
 
-      {/* ── Sidebar ── */}
-      <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
-        <div className="p-6 flex flex-col h-full">
-          <div className="mb-8"><Logo /></div>
-          <div className="mb-6 px-4 py-3 bg-white/10 rounded-[8px]">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Org Admin</p>
-            <p className="text-sm font-semibold text-white mt-0.5 truncate">{orgName}</p>
-          </div>
-          <nav className="flex-1 space-y-1 overflow-y-auto">
-            {NAV.map(item => (
-              <button key={item.key} onClick={() => setActive(item.key)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-[8px] transition-all text-left
-                  ${active === item.key ? 'bg-white/10 text-brand-accent font-semibold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
-                <item.icon className="w-5 h-5 shrink-0" />
-                <span className="font-medium text-sm">{item.label}</span>
-              </button>
-            ))}
-          </nav>
-          <div className="pt-6 border-t border-white/10 mt-auto space-y-3">
-            <div className="flex items-center gap-3 px-4">
-              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">{initials}</div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-white truncate">{displayName}</p>
-                <p className="text-[10px] text-white/50">Org Admin</p>
-              </div>
+      <div className="flex h-screen bg-brand-background overflow-hidden">
+
+        {/* ── Sidebar ── */}
+        <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
+          <div className="p-6 flex flex-col h-full">
+            <div className="mb-8"><Logo /></div>
+
+            <div className="mb-6 px-4 py-3 bg-white/10 rounded-[8px]">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Org Admin</p>
+              <p className="text-sm font-semibold text-white mt-0.5 truncate">{orgName}</p>
             </div>
-            <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2.5 w-full text-white/70 hover:text-white hover:bg-white/5 rounded-[8px] transition-all">
-              <LogOut className="w-5 h-5" /><span className="font-medium text-sm">Logout</span>
+
+            <nav className="flex-1 space-y-1 overflow-y-auto sidebar-scroll">
+              {NAV.map(item => (
+                <button key={item.key} onClick={() => setActive(item.key)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-[8px] transition-all text-left
+                    ${active === item.key ? 'bg-white/10 text-brand-accent font-semibold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
+                  <item.icon className="w-5 h-5 shrink-0" />
+                  <span className="font-medium text-sm flex-1">{item.label}</span>
+                  {item.key === 'requests' && pendingCount > 0 && (
+                    <span className="w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                      {pendingCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </nav>
+
+            {/* Org code removed from sidebar — now in Settings only */}
+
+            <div className="pt-4 border-t border-white/10 space-y-3">
+              <div className="flex items-center gap-3 px-4">
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">{initials}</div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{displayName}</p>
+                  <p className="text-[10px] text-white/50">Org Admin</p>
+                </div>
+              </div>
+              <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2.5 w-full text-white/70 hover:text-white hover:bg-white/5 rounded-[8px] transition-all">
+                <LogOut className="w-5 h-5" /><span className="font-medium text-sm">Logout</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        {/* Mobile bottom tabs */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-brand-primary flex z-40 overflow-x-auto">
+          {NAV.slice(0, 5).map(item => (
+            <button key={item.key} onClick={() => setActive(item.key)}
+              className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors min-w-[60px] relative
+                ${active === item.key ? 'text-brand-accent' : 'text-white/60'}`}>
+              <item.icon className="w-4 h-4" />
+              {item.key === 'requests' && pendingCount > 0 && (
+                <span className="absolute top-1.5 right-1 w-3.5 h-3.5 rounded-full bg-red-500 text-white text-[8px] font-bold flex items-center justify-center">
+                  {pendingCount}
+                </span>
+              )}
+              {item.label.split(' ')[0]}
             </button>
-          </div>
+          ))}
         </div>
-      </aside>
 
-      {/* Mobile bottom tabs */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-brand-primary flex z-40 overflow-x-auto">
-        {NAV.slice(0, 5).map(item => (
-          <button key={item.key} onClick={() => setActive(item.key)}
-            className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors min-w-[60px]
-              ${active === item.key ? 'text-brand-accent' : 'text-white/60'}`}>
-            <item.icon className="w-4 h-4" />
-            {item.label.split(' ')[0]}
-          </button>
-        ))}
+        {/* ── Content ── */}
+        <main className="flex-1 overflow-y-auto pb-20 md:pb-0 themed-scroll">
+          <div className="px-6 py-5 border-b border-black/5 bg-white flex items-center justify-between sticky top-0 z-10">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Admin</p>
+              <h1 className="text-lg font-heading font-bold text-brand-text-primary">{navLabel[active]}</h1>
+            </div>
+            {active !== 'requests' && pendingCount > 0 && (
+              <button
+                onClick={() => setActive('requests')}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-full text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                {pendingCount} staff request{pendingCount > 1 ? 's' : ''} pending
+              </button>
+            )}
+          </div>
+          <div className="p-4 md:p-6">
+            <AnimatePresence mode="wait">
+              <motion.div key={active} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                {PageMap[active]}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </main>
       </div>
-
-      {/* ── Content ── */}
-      <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
-        <div className="px-6 py-5 border-b border-black/5 bg-white flex items-center justify-between sticky top-0 z-10">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Admin</p>
-            <h1 className="text-lg font-heading font-bold text-brand-text-primary">{navLabel[active]}</h1>
-          </div>
-        </div>
-        <div className="p-4 md:p-6">
-          <AnimatePresence mode="wait">
-            <motion.div key={active} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
-              {PageMap[active]}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-      </main>
-    </div>
+    </>
   );
 };

@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { auth } from "../lib/firebase";
-import { getUserProfile, UserProfile } from "../lib/authService";
+import { doc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "../lib/firebase";
+import { UserProfile } from "../lib/authService";
 
 interface AuthContextType {
   user: User | null;
@@ -18,33 +19,52 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser]       = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      setProfile(null); // ✅ clear immediately — no stale profile while fetch is in-flight
-      
-      if (u) {
-        try {
-          const p = await getUserProfile(u.uid);
-          // ✅ guard: make sure the user hasn't changed again by the time fetch resolves
-          setUser(current => {
-            if (current?.uid === u.uid) {
-              setProfile(p);
-            }
-            return current;
-          });
-        } catch {
-          setProfile(null);
-        }
+    let profileUnsub: (() => void) | null = null;
+
+    const authUnsub = onAuthStateChanged(auth, (u) => {
+      // Tear down any previous profile listener immediately
+      if (profileUnsub) {
+        profileUnsub();
+        profileUnsub = null;
       }
-      
-      setLoading(false);
+
+      setUser(u);
+      setProfile(null); // clear stale profile right away
+
+      if (u) {
+        // Real-time listener on this user's Firestore doc —
+        // any change (e.g. admin toggling canCreateTask, status → approved)
+        // will push a new profile object here automatically.
+        profileUnsub = onSnapshot(
+          doc(db, "users", u.uid),
+          (snap) => {
+            if (snap.exists()) {
+              setProfile({ uid: snap.id, ...snap.data() } as UserProfile);
+            } else {
+              setProfile(null);
+            }
+            setLoading(false);
+          },
+          () => {
+            // Permission error or network hiccup — clear and unblock UI
+            setProfile(null);
+            setLoading(false);
+          }
+        );
+      } else {
+        setLoading(false);
+      }
     });
-    return unsub;
+
+    return () => {
+      authUnsub();
+      if (profileUnsub) profileUnsub();
+    };
   }, []);
 
   return (
