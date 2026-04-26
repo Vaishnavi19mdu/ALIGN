@@ -25,12 +25,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      setProfile(null); // ✅ clear immediately — no stale profile while fetch is in-flight
+      
       if (u) {
-        const p = await getUserProfile(u.uid);
-        setProfile(p);
-      } else {
-        setProfile(null);
+        try {
+          const p = await getUserProfile(u.uid);
+          // ✅ guard: make sure the user hasn't changed again by the time fetch resolves
+          setUser(current => {
+            if (current?.uid === u.uid) {
+              setProfile(p);
+            }
+            return current;
+          });
+        } catch {
+          setProfile(null);
+        }
       }
+      
       setLoading(false);
     });
     return unsub;

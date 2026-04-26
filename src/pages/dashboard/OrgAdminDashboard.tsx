@@ -3,13 +3,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, GitBranch, Users, BarChart2,
   ScrollText, FileDown, Sparkles, Plus, ToggleLeft, ToggleRight,
-  Download, LogOut, X,
+  Download, LogOut, X, Settings, CheckCircle2, Save, Wifi, WifiOff,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Logo } from '../../components/common/Logo';
-import { useUser } from '../../context/UserContext';
+import { useAuth } from '../../context/AuthContext';
+import { logOut } from '../../lib/authService';
+import { useNavigate } from 'react-router-dom';
 
 // ─── Dummy data ────────────────────────────────────────────────────────────────
 
@@ -75,324 +77,132 @@ const pieColors = ['#7c3aed', '#f59e0b', '#10b981', '#6b7280'];
 
 const buildPDF = (title: string): string => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-
-  const PAGE_W = 210;
-  const PAGE_H = 297;
-  const MARGIN = 18;
-  const CONTENT_W = PAGE_W - MARGIN * 2;
-
-  const timestamp = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit', month: 'long', year: 'numeric',
-  });
-
-  const hex = (h: string): [number, number, number] => [
-    parseInt(h.slice(1, 3), 16),
-    parseInt(h.slice(3, 5), 16),
-    parseInt(h.slice(5, 7), 16),
-  ];
-
-  const setColor = (color: string, type: 'fill' | 'text' | 'draw' = 'fill') => {
-    const [r, g, b] = hex(color);
-    if (type === 'fill') doc.setFillColor(r, g, b);
-    if (type === 'text') doc.setTextColor(r, g, b);
-    if (type === 'draw') doc.setDrawColor(r, g, b);
+  const PAGE_W = 210; const PAGE_H = 297; const MARGIN = 18; const CONTENT_W = PAGE_W - MARGIN * 2;
+  const timestamp = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  const hex = (h: string): [number, number, number] => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  const setColor = (color: string, type: 'fill'|'text'|'draw' = 'fill') => {
+    const [r,g,b] = hex(color);
+    if (type==='fill') doc.setFillColor(r,g,b);
+    if (type==='text') doc.setTextColor(r,g,b);
+    if (type==='draw') doc.setDrawColor(r,g,b);
   };
-
   const drawHeader = () => {
-    setColor('#7c3aed', 'fill');
-    doc.rect(0, 0, PAGE_W, 36, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    setColor('#ffffff', 'text');
-    doc.text(title.toUpperCase(), MARGIN, 16);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    setColor('#e9d5ff', 'text');
-    doc.text('Impact Global NGO', MARGIN, 23);
-    doc.text(`Generated: ${timestamp}`, MARGIN, 29);
+    setColor('#7c3aed','fill'); doc.rect(0,0,PAGE_W,36,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(16); setColor('#ffffff','text'); doc.text(title.toUpperCase(),MARGIN,16);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); setColor('#e9d5ff','text');
+    doc.text('Impact Global NGO',MARGIN,23); doc.text(`Generated: ${timestamp}`,MARGIN,29);
   };
-
   const drawFooter = () => {
-    setColor('#f3f4f6', 'fill');
-    doc.rect(0, PAGE_H - 14, PAGE_W, 14, 'F');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    setColor('#6b7280', 'text');
-    doc.text('Impact Global NGO — Confidential', MARGIN, PAGE_H - 5);
-    doc.text('Page 1', PAGE_W - MARGIN, PAGE_H - 5, { align: 'right' });
+    setColor('#f3f4f6','fill'); doc.rect(0,PAGE_H-14,PAGE_W,14,'F');
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#6b7280','text');
+    doc.text('Impact Global NGO — Confidential',MARGIN,PAGE_H-5);
+    doc.text('Page 1',PAGE_W-MARGIN,PAGE_H-5,{align:'right'});
   };
-
   const sectionHeading = (text: string, y: number) => {
-    setColor('#7c3aed', 'fill');
-    doc.rect(MARGIN, y, CONTENT_W, 7, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    setColor('#ffffff', 'text');
-    doc.text(text, MARGIN + 3, y + 5);
-    return y + 12;
+    setColor('#7c3aed','fill'); doc.rect(MARGIN,y,CONTENT_W,7,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(8.5); setColor('#ffffff','text'); doc.text(text,MARGIN+3,y+5); return y+12;
   };
-
-  const kpiRow = (items: { label: string; value: string; sub: string }[], y: number) => {
-    const boxW = CONTENT_W / items.length - 2;
-    items.forEach((item, i) => {
-      const x = MARGIN + i * (boxW + 2);
-      setColor('#f5f3ff', 'fill');
-      doc.roundedRect(x, y, boxW, 20, 2, 2, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      setColor('#7c3aed', 'text');
-      doc.text(item.value, x + boxW / 2, y + 10, { align: 'center' });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      setColor('#374151', 'text');
-      doc.text(item.label, x + boxW / 2, y + 15, { align: 'center' });
-      setColor('#6b7280', 'text');
-      doc.text(item.sub, x + boxW / 2, y + 19, { align: 'center' });
-    });
-    return y + 26;
+  const kpiRow = (items: {label:string;value:string;sub:string}[], y: number) => {
+    const boxW = CONTENT_W/items.length-2;
+    items.forEach((item,i) => {
+      const x = MARGIN+i*(boxW+2); setColor('#f5f3ff','fill'); doc.roundedRect(x,y,boxW,20,2,2,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(14); setColor('#7c3aed','text'); doc.text(item.value,x+boxW/2,y+10,{align:'center'});
+      doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#374151','text'); doc.text(item.label,x+boxW/2,y+15,{align:'center'});
+      setColor('#6b7280','text'); doc.text(item.sub,x+boxW/2,y+19,{align:'center'});
+    }); return y+26;
   };
-
   const drawTable = (headers: string[], rows: string[][], colWidths: number[], y: number) => {
-    const ROW_H = 8;
-    setColor('#7c3aed', 'fill');
-    doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    setColor('#ffffff', 'text');
-    let x = MARGIN + 2;
-    headers.forEach((h, i) => { doc.text(h, x, y + 5.5); x += colWidths[i]; });
-    y += ROW_H;
-    rows.forEach((row, ri) => {
-      setColor(ri % 2 === 0 ? '#f9fafb' : '#ffffff', 'fill');
-      doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      x = MARGIN + 2;
-      row.forEach((cell, ci) => {
-        const isHighlight = cell === 'Emergency' || cell === 'Unassigned';
-        setColor(isHighlight ? '#dc2626' : '#374151', 'text');
-        doc.text(cell, x, y + 5.5);
-        x += colWidths[ci];
-      });
-      y += ROW_H;
+    const ROW_H=8; setColor('#7c3aed','fill'); doc.rect(MARGIN,y,CONTENT_W,ROW_H,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); setColor('#ffffff','text');
+    let x=MARGIN+2; headers.forEach((h,i)=>{doc.text(h,x,y+5.5);x+=colWidths[i];}); y+=ROW_H;
+    rows.forEach((row,ri)=>{
+      setColor(ri%2===0?'#f9fafb':'#ffffff','fill'); doc.rect(MARGIN,y,CONTENT_W,ROW_H,'F');
+      doc.setFont('helvetica','normal'); doc.setFontSize(7.5); x=MARGIN+2;
+      row.forEach((cell,ci)=>{
+        const isHighlight=cell==='Emergency'||cell==='Unassigned';
+        setColor(isHighlight?'#dc2626':'#374151','text'); doc.text(cell,x,y+5.5); x+=colWidths[ci];
+      }); y+=ROW_H;
     });
-    setColor('#e5e7eb', 'draw');
-    doc.setLineWidth(0.2);
-    doc.rect(MARGIN, y - rows.length * ROW_H - ROW_H, CONTENT_W, (rows.length + 1) * ROW_H, 'D');
-    return y + 4;
+    setColor('#e5e7eb','draw'); doc.setLineWidth(0.2); doc.rect(MARGIN,y-rows.length*ROW_H-ROW_H,CONTENT_W,(rows.length+1)*ROW_H,'D'); return y+4;
   };
-
-  const barRow = (label: string, value: number, max: number, color: string, y: number) => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    setColor('#374151', 'text');
-    doc.text(label, MARGIN, y + 3.5);
-    const barX = MARGIN + 35;
-    const barW = CONTENT_W - 50;
-    setColor('#e5e7eb', 'fill');
-    doc.roundedRect(barX, y, barW, 5, 1, 1, 'F');
-    setColor(color, 'fill');
-    doc.roundedRect(barX, y, (value / max) * barW, 5, 1, 1, 'F');
-    setColor('#374151', 'text');
-    doc.text(`${value}`, barX + barW + 3, y + 3.5);
-    return y + 9;
+  const barRow = (label:string,value:number,max:number,color:string,y:number)=>{
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); setColor('#374151','text'); doc.text(label,MARGIN,y+3.5);
+    const barX=MARGIN+35; const barW=CONTENT_W-50; setColor('#e5e7eb','fill'); doc.roundedRect(barX,y,barW,5,1,1,'F');
+    setColor(color,'fill'); doc.roundedRect(barX,y,(value/max)*barW,5,1,1,'F');
+    setColor('#374151','text'); doc.text(`${value}`,barX+barW+3,y+3.5); return y+9;
   };
-
-  drawHeader();
-  drawFooter();
-  let y = 44;
-
-  if (title === 'Task Summary') {
-    y = sectionHeading('OVERVIEW', y);
-    y = kpiRow([
-      { label: 'Total Tasks',   value: '38',   sub: '+4 this week' },
-      { label: 'Open',          value: '12',   sub: 'needs action' },
-      { label: 'In Progress',   value: '9',    sub: 'active' },
-      { label: 'Completed',     value: '17',   sub: '94% on time' },
-    ], y);
-    y = kpiRow([
-      { label: 'Emergency',     value: '2',    sub: 'critical' },
-      { label: 'High Priority', value: '7',    sub: '3 unassigned' },
-      { label: 'Avg Impact',    value: '83.8', sub: 'score' },
-      { label: 'Unassigned',    value: '3',    sub: 'open slots' },
-    ], y);
-    y = sectionHeading('TASK LIST', y);
-    y = drawTable(
-      ['ID', 'Title', 'Status', 'Impact', 'Assigned To', 'Created By'],
-      [
-        ['T-201', 'Food Kit Distribution', 'Open',        '92', 'Unassigned', 'Admin'],
-        ['T-202', 'Community Teaching',    'Matching',    '87', 'Ravi M.',    'Staff'],
-        ['T-203', 'Flood Relief Ops',      'Emergency',   '99', 'Unassigned', 'Admin'],
-        ['T-204', 'Medical Camp Setup',    'In Progress', '78', 'Priya S.',   'Staff'],
-        ['T-205', 'Tree Planting Drive',   'Open',        '63', 'Unassigned', 'Admin'],
-      ],
-      [16, 52, 28, 16, 34, 28],
-      y,
-    );
-    y = sectionHeading('COMPLETION STATS', y);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    setColor('#374151', 'text');
-    ['On-time completion rate : 94%', 'Average impact score    : 83.8', 'Unassigned tasks        : 3'].forEach(line => {
-      doc.text(line, MARGIN + 3, y); y += 6;
-    });
+  drawHeader(); drawFooter(); let y=44;
+  if (title==='Task Summary') {
+    y=sectionHeading('OVERVIEW',y);
+    y=kpiRow([{label:'Total Tasks',value:'38',sub:'+4 this week'},{label:'Open',value:'12',sub:'needs action'},{label:'In Progress',value:'9',sub:'active'},{label:'Completed',value:'17',sub:'94% on time'}],y);
+    y=kpiRow([{label:'Emergency',value:'2',sub:'critical'},{label:'High Priority',value:'7',sub:'3 unassigned'},{label:'Avg Impact',value:'83.8',sub:'score'},{label:'Unassigned',value:'3',sub:'open slots'}],y);
+    y=sectionHeading('TASK LIST',y);
+    y=drawTable(['ID','Title','Status','Impact','Assigned To','Created By'],[['T-201','Food Kit Distribution','Open','92','Unassigned','Admin'],['T-202','Community Teaching','Matching','87','Ravi M.','Staff'],['T-203','Flood Relief Ops','Emergency','99','Unassigned','Admin'],['T-204','Medical Camp Setup','In Progress','78','Priya S.','Staff'],['T-205','Tree Planting Drive','Open','63','Unassigned','Admin']],[16,52,28,16,34,28],y);
+    y=sectionHeading('COMPLETION STATS',y);
+    ['On-time completion rate : 94%','Average impact score    : 83.8','Unassigned tasks        : 3'].forEach(line=>{doc.setFont('helvetica','normal');doc.setFontSize(8);setColor('#374151','text');doc.text(line,MARGIN+3,y);y+=6;});
   }
-
-  if (title === 'Assignment List') {
-    y = sectionHeading('VOLUNTEER-TO-TASK MAPPING', y);
-    const assignments = [
-      { task: 'Food Kit Distribution (T-201)', volunteer: 'Anjali R.', skill: 94, rel: 88, dist: 2.1, backups: 'Mohan D., Sneha T.' },
-      { task: 'Community Teaching (T-202)',     volunteer: 'Ravi M.',   skill: 89, rel: 92, dist: 3.4, backups: 'Aditi K.' },
-      { task: 'Medical Camp Setup (T-204)',     volunteer: 'Priya S.',  skill: 97, rel: 85, dist: 1.8, backups: 'Suresh P., Lakshmi V.' },
-    ];
-    assignments.forEach(a => {
-      setColor('#f9fafb', 'fill');
-      doc.roundedRect(MARGIN, y, CONTENT_W, 32, 2, 2, 'F');
-      setColor('#e5e7eb', 'draw');
-      doc.setLineWidth(0.2);
-      doc.roundedRect(MARGIN, y, CONTENT_W, 32, 2, 2, 'D');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      setColor('#1f2937', 'text');
-      doc.text(a.task, MARGIN + 4, y + 8);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      setColor('#6b7280', 'text');
-      doc.text('Assigned → ', MARGIN + 4, y + 15);
-      doc.setFont('helvetica', 'bold');
-      setColor('#7c3aed', 'text');
-      doc.text(a.volunteer, MARGIN + 25, y + 15);
-      [
-        { label: 'Skill Match', val: `${a.skill}%`,  color: '#7c3aed' },
-        { label: 'Reliability', val: `${a.rel}%`,    color: '#10b981' },
-        { label: 'Distance',    val: `${a.dist} km`, color: '#3b82f6' },
-      ].forEach((m, mi) => {
-        const mx = MARGIN + 4 + mi * 50;
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        const [r, g, b] = hex(m.color);
-        doc.setTextColor(r, g, b);
-        doc.text(m.val, mx, y + 24);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
-        setColor('#6b7280', 'text');
-        doc.text(m.label, mx, y + 29);
+  if (title==='Assignment List') {
+    y=sectionHeading('VOLUNTEER-TO-TASK MAPPING',y);
+    [{task:'Food Kit Distribution (T-201)',volunteer:'Anjali R.',skill:94,rel:88,dist:2.1,backups:'Mohan D., Sneha T.'},{task:'Community Teaching (T-202)',volunteer:'Ravi M.',skill:89,rel:92,dist:3.4,backups:'Aditi K.'},{task:'Medical Camp Setup (T-204)',volunteer:'Priya S.',skill:97,rel:85,dist:1.8,backups:'Suresh P., Lakshmi V.'}].forEach(a=>{
+      setColor('#f9fafb','fill'); doc.roundedRect(MARGIN,y,CONTENT_W,32,2,2,'F'); setColor('#e5e7eb','draw'); doc.setLineWidth(0.2); doc.roundedRect(MARGIN,y,CONTENT_W,32,2,2,'D');
+      doc.setFont('helvetica','bold'); doc.setFontSize(9); setColor('#1f2937','text'); doc.text(a.task,MARGIN+4,y+8);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); setColor('#6b7280','text'); doc.text('Assigned → ',MARGIN+4,y+15);
+      doc.setFont('helvetica','bold'); setColor('#7c3aed','text'); doc.text(a.volunteer,MARGIN+25,y+15);
+      [{label:'Skill Match',val:`${a.skill}%`,color:'#7c3aed'},{label:'Reliability',val:`${a.rel}%`,color:'#10b981'},{label:'Distance',val:`${a.dist} km`,color:'#3b82f6'}].forEach((m,mi)=>{
+        const mx=MARGIN+4+mi*50; doc.setFont('helvetica','bold'); doc.setFontSize(11); const [r,g,b]=hex(m.color); doc.setTextColor(r,g,b); doc.text(m.val,mx,y+24);
+        doc.setFont('helvetica','normal'); doc.setFontSize(6.5); setColor('#6b7280','text'); doc.text(m.label,mx,y+29);
       });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      setColor('#6b7280', 'text');
-      doc.text(`Backups: ${a.backups}`, MARGIN + 4 + 3 * 50, y + 24);
-      y += 37;
+      doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#6b7280','text'); doc.text(`Backups: ${a.backups}`,MARGIN+4+3*50,y+24); y+=37;
     });
-    y = sectionHeading('UNASSIGNED TASKS', y);
-    y = drawTable(
-      ['Task ID', 'Title', 'Impact Score', 'Status'],
-      [
-        ['T-201', 'Food Kit Distribution', '92', 'Open'],
-        ['T-203', 'Flood Relief Ops',      '99', 'Emergency'],
-        ['T-205', 'Tree Planting Drive',   '63', 'Open'],
-      ],
-      [20, 80, 36, 38],
-      y,
-    );
+    y=sectionHeading('UNASSIGNED TASKS',y);
+    y=drawTable(['Task ID','Title','Impact Score','Status'],[['T-201','Food Kit Distribution','92','Open'],['T-203','Flood Relief Ops','99','Emergency'],['T-205','Tree Planting Drive','63','Open']],[20,80,36,38],y);
   }
-
-  if (title === 'Analytics Snapshot') {
-    y = sectionHeading('SUMMARY KPIs', y);
-    y = kpiRow([
-      { label: 'Active Volunteers', value: '124', sub: '+18 new' },
-      { label: 'Completed Tasks',   value: '261', sub: '94% on time' },
-      { label: 'Weekly Avg Rate',   value: '70%', sub: 'completion' },
-      { label: 'Best Day',          value: 'Sat', sub: '91%' },
-    ], y);
-    y = sectionHeading('TASK COMPLETION RATE — THIS WEEK', y);
-    [
-      { label: 'Monday', val: 62 }, { label: 'Tuesday', val: 78 }, { label: 'Wednesday', val: 55 },
-      { label: 'Thursday', val: 89 }, { label: 'Friday', val: 72 }, { label: 'Saturday', val: 91 }, { label: 'Sunday', val: 44 },
-    ].forEach(d => { y = barRow(d.label, d.val, 100, '#7c3aed', y); });
-    y += 2;
-    y = sectionHeading('VOLUNTEER ACTIVITY BY CATEGORY', y);
-    [
-      { label: 'Medical', val: 34 }, { label: 'Teaching', val: 28 },
-      { label: 'Relief', val: 22 },  { label: 'Other', val: 16 },
-    ].forEach((d, i) => { y = barRow(d.label, d.val, 100, ['#7c3aed','#f59e0b','#10b981','#6b7280'][i], y); });
-    y += 2;
-    y = sectionHeading('STAFF PERFORMANCE', y);
-    [
-      { label: 'Meena Nair', val: 12 }, { label: 'Karthik Rajan', val: 8 },
-      { label: 'Divya Pillai', val: 15 }, { label: 'Arjun Das', val: 3 },
-    ].forEach(d => { y = barRow(d.label, d.val, 20, '#7c3aed', y); });
+  if (title==='Analytics Snapshot') {
+    y=sectionHeading('SUMMARY KPIs',y);
+    y=kpiRow([{label:'Active Volunteers',value:'124',sub:'+18 new'},{label:'Completed Tasks',value:'261',sub:'94% on time'},{label:'Weekly Avg Rate',value:'70%',sub:'completion'},{label:'Best Day',value:'Sat',sub:'91%'}],y);
+    y=sectionHeading('TASK COMPLETION RATE — THIS WEEK',y);
+    [{label:'Monday',val:62},{label:'Tuesday',val:78},{label:'Wednesday',val:55},{label:'Thursday',val:89},{label:'Friday',val:72},{label:'Saturday',val:91},{label:'Sunday',val:44}].forEach(d=>{y=barRow(d.label,d.val,100,'#7c3aed',y);});
+    y+=2; y=sectionHeading('VOLUNTEER ACTIVITY BY CATEGORY',y);
+    [{label:'Medical',val:34},{label:'Teaching',val:28},{label:'Relief',val:22},{label:'Other',val:16}].forEach((d,i)=>{y=barRow(d.label,d.val,100,['#7c3aed','#f59e0b','#10b981','#6b7280'][i],y);});
+    y+=2; y=sectionHeading('STAFF PERFORMANCE',y);
+    [{label:'Meena Nair',val:12},{label:'Karthik Rajan',val:8},{label:'Divya Pillai',val:15},{label:'Arjun Das',val:3}].forEach(d=>{y=barRow(d.label,d.val,20,'#7c3aed',y);});
   }
-
   return doc.output('datauristring');
 };
 
-// ─── Inline PDF Viewer Modal ────────────────────────────────────────────────────
+// ─── PDF Viewer ────────────────────────────────────────────────────────────────
 
-interface PDFViewerProps {
-  title: string;
-  dataUri: string;
-  onClose: () => void;
-}
-
-const PDFViewer = ({ title, dataUri, onClose }: PDFViewerProps) => {
+const PDFViewer = ({ title, dataUri, onClose }: { title: string; dataUri: string; onClose: () => void }) => {
   const handleDownload = () => {
-    const a = document.createElement('a');
-    a.href = dataUri;
-    a.download = `${title.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const a = document.createElement('a'); a.href = dataUri;
+    a.download = `${title.replace(/\s+/g,'_')}_${Date.now()}.pdf`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
-
   return (
     <AnimatePresence>
-      <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-      >
-        <motion.div
-          className="relative bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+        <motion.div className="relative bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
           style={{ width: '90vw', maxWidth: 860, height: '90vh' }}
-          initial={{ scale: 0.92, opacity: 0, y: 20 }}
-          animate={{ scale: 1, opacity: 1, y: 0 }}
-          exit={{ scale: 0.92, opacity: 0, y: 20 }}
-          transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-          onClick={e => e.stopPropagation()}
-        >
-          {/* Modal header */}
+          initial={{ scale: 0.92, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.92, opacity: 0, y: 20 }} transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+          onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/8 bg-brand-background shrink-0">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Preview</p>
               <p className="text-sm font-heading font-bold text-brand-text-primary">{title}</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={handleDownload}
-                className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"
-              >
+              <Button size="sm" onClick={handleDownload} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
                 <Download className="w-3 h-3" /> Download PDF
               </Button>
-              <button
-                onClick={onClose}
-                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/8 transition-colors text-brand-text-secondary hover:text-brand-text-primary"
-              >
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/8 transition-colors text-brand-text-secondary hover:text-brand-text-primary">
                 <X className="w-4 h-4" />
               </button>
             </div>
           </div>
-
-          {/* PDF iframe */}
           <div className="flex-1 bg-neutral-200 overflow-hidden">
-            <iframe
-              src={dataUri}
-              className="w-full h-full border-0"
-              title={`${title} PDF Preview`}
-            />
+            <iframe src={dataUri} className="w-full h-full border-0" title={`${title} PDF Preview`} />
           </div>
         </motion.div>
       </motion.div>
@@ -418,12 +228,8 @@ const DashboardHome = () => (
     <div className="flex items-center justify-between">
       <h2 className="text-base font-heading font-bold">Urgent Unassigned Tasks</h2>
       <div className="flex gap-2">
-        <Button size="sm" variant="ghost" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
-          <Plus className="w-3 h-3" /> Create Task
-        </Button>
-        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
-          <Sparkles className="w-3 h-3" /> Auto Assign
-        </Button>
+        <Button size="sm" variant="ghost" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Plus className="w-3 h-3" /> Create Task</Button>
+        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Sparkles className="w-3 h-3" /> Auto Assign</Button>
       </div>
     </div>
     <Card className="overflow-hidden">
@@ -431,7 +237,7 @@ const DashboardHome = () => (
         <table className="w-full text-left">
           <thead>
             <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Task Name', 'Impact', 'Status', 'Assigned To', 'Created By', ''].map(h => (
+              {['Task Name','Impact','Status','Assigned To','Created By',''].map(h => (
                 <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -439,26 +245,12 @@ const DashboardHome = () => (
           <tbody className="divide-y divide-black/5 text-brand-text-primary">
             {tasks.map(t => (
               <tr key={t.id} className="hover:bg-brand-background/30 transition-colors">
-                <td className="px-4 py-3">
-                  <div className="font-semibold text-sm">{t.title}</div>
-                  <div className="text-[10px] text-brand-text-secondary">{t.id}</div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-14 h-1 bg-black/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-brand-primary rounded-full" style={{ width: `${t.impact}%` }} />
-                    </div>
-                    <span className="text-[10px] font-bold">{t.impact}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span>
-                </td>
+                <td className="px-4 py-3"><div className="font-semibold text-sm">{t.title}</div><div className="text-[10px] text-brand-text-secondary">{t.id}</div></td>
+                <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-14 h-1 bg-black/5 rounded-full overflow-hidden"><div className="h-full bg-brand-primary rounded-full" style={{ width: `${t.impact}%` }} /></div><span className="text-[10px] font-bold">{t.impact}</span></div></td>
+                <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span></td>
                 <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.assignedTo}</td>
                 <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.createdBy}</td>
-                <td className="px-4 py-3">
-                  <Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">Assign</Button>
-                </td>
+                <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">Assign</Button></td>
               </tr>
             ))}
           </tbody>
@@ -472,16 +264,14 @@ const TasksPage = () => (
   <div className="space-y-4">
     <div className="flex items-center justify-between">
       <h2 className="text-base font-heading font-bold">All Tasks</h2>
-      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
-        <Plus className="w-3 h-3" /> Create Task
-      </Button>
+      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Plus className="w-3 h-3" /> Create Task</Button>
     </div>
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-left">
           <thead>
             <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Task', 'Impact', 'Status', 'Assigned Volunteer', 'Created By', 'Actions'].map(h => (
+              {['Task','Impact','Status','Assigned Volunteer','Created By','Actions'].map(h => (
                 <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -489,14 +279,9 @@ const TasksPage = () => (
           <tbody className="divide-y divide-black/5 text-brand-text-primary">
             {tasks.map(t => (
               <tr key={t.id} className="hover:bg-brand-background/30 transition-colors">
-                <td className="px-4 py-3">
-                  <div className="font-semibold text-sm">{t.title}</div>
-                  <div className="text-[10px] text-brand-text-secondary">{t.id}</div>
-                </td>
+                <td className="px-4 py-3"><div className="font-semibold text-sm">{t.title}</div><div className="text-[10px] text-brand-text-secondary">{t.id}</div></td>
                 <td className="px-4 py-3"><span className="text-sm font-bold text-brand-primary">{t.impact}</span></td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span>
-                </td>
+                <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${statusStyle(t.status)}`}>{t.status}</span></td>
                 <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.assignedTo}</td>
                 <td className="px-4 py-3 text-sm text-brand-text-secondary">{t.createdBy}</td>
                 <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">Edit</Button></td>
@@ -513,9 +298,7 @@ const AllocationPage = () => (
   <div className="space-y-4">
     <div className="flex items-center justify-between">
       <h2 className="text-base font-heading font-bold">Allocation View</h2>
-      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
-        <Sparkles className="w-3 h-3" /> Re-run Auto Assign
-      </Button>
+      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Sparkles className="w-3 h-3" /> Re-run Auto Assign</Button>
     </div>
     <div className="space-y-3">
       {allocationData.map((row, i) => (
@@ -562,7 +345,7 @@ const StaffManagementPage = () => {
         <table className="w-full text-left">
           <thead>
             <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Name', 'Role', 'Tasks Created', 'Can Create Tasks', ''].map(h => (
+              {['Name','Role','Tasks Created','Can Create Tasks',''].map(h => (
                 <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -602,18 +385,12 @@ const AnalyticsPage = () => {
   const total  = analyticsVolunteer.reduce((a, b) => a + b.val, 0);
   let cumAngle = 0;
   const slices = analyticsVolunteer.map((d, i) => {
-    const angle = (d.val / total) * 360;
-    const start = cumAngle;
-    cumAngle += angle;
-    const r = 60; const cx = 80; const cy = 80;
-    const toRad = (deg: number) => (deg * Math.PI) / 180;
-    const x1 = cx + r * Math.cos(toRad(start - 90));
-    const y1 = cy + r * Math.sin(toRad(start - 90));
-    const x2 = cx + r * Math.cos(toRad(start + angle - 90));
-    const y2 = cy + r * Math.sin(toRad(start + angle - 90));
-    return { d: `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${angle > 180 ? 1 : 0} 1 ${x2} ${y2} Z`, color: pieColors[i], label: d.label, val: d.val };
+    const angle = (d.val / total) * 360; const start = cumAngle; cumAngle += angle;
+    const r=60; const cx=80; const cy=80; const toRad=(deg:number)=>(deg*Math.PI)/180;
+    const x1=cx+r*Math.cos(toRad(start-90)); const y1=cy+r*Math.sin(toRad(start-90));
+    const x2=cx+r*Math.cos(toRad(start+angle-90)); const y2=cy+r*Math.sin(toRad(start+angle-90));
+    return { d:`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${angle>180?1:0} 1 ${x2} ${y2} Z`, color:pieColors[i], label:d.label, val:d.val };
   });
-
   return (
     <div className="space-y-6">
       <h2 className="text-base font-heading font-bold">Analytics & Insights</h2>
@@ -625,7 +402,7 @@ const AnalyticsPage = () => {
               <div key={i} className="flex-1 flex flex-col items-center gap-1">
                 <span className="text-[10px] font-bold text-brand-primary">{d.val}%</span>
                 <motion.div className="w-full bg-brand-primary/80 rounded-t-md" style={{ height: 0 }}
-                  animate={{ height: `${(d.val / maxBar) * 100}%` }} transition={{ delay: i * 0.05, duration: 0.5, ease: 'easeOut' }} />
+                  animate={{ height: `${(d.val/maxBar)*100}%` }} transition={{ delay: i*0.05, duration: 0.5, ease: 'easeOut' }} />
                 <span className="text-[10px] text-brand-text-secondary">{d.label}</span>
               </div>
             ))}
@@ -657,7 +434,7 @@ const AnalyticsPage = () => {
                 <span className="text-sm w-28 shrink-0 font-medium text-brand-text-primary">{s.name.split(' ')[0]}</span>
                 <div className="flex-1 h-2 bg-black/5 rounded-full overflow-hidden">
                   <motion.div className="h-full bg-brand-primary rounded-full" style={{ width: 0 }}
-                    animate={{ width: `${(s.tasks / 20) * 100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
+                    animate={{ width: `${(s.tasks/20)*100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
                 </div>
                 <span className="text-xs font-bold text-brand-text-primary w-16 text-right">{s.tasks} tasks</span>
               </div>
@@ -674,10 +451,10 @@ const ActivityLogPage = () => (
     <h2 className="text-base font-heading font-bold">Activity Log</h2>
     <Card className="divide-y divide-black/5">
       {activityLog.map((e, i) => (
-        <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
+        <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i*0.05 }}
           className="flex items-start gap-4 px-5 py-4">
           <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <span className="text-[10px] font-bold text-brand-primary">{e.user.split(' ').map(w => w[0]).join('').slice(0, 2)}</span>
+            <span className="text-[10px] font-bold text-brand-primary">{e.user.split(' ').map(w=>w[0]).join('').slice(0,2)}</span>
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm text-brand-text-primary"><span className="font-semibold">{e.user}</span> — {e.action}</p>
@@ -689,16 +466,9 @@ const ActivityLogPage = () => (
   </div>
 );
 
-// ─── Reports Page (with inline viewer) ────────────────────────────────────────
-
 const ReportsPage = () => {
   const [preview, setPreview] = useState<{ title: string; dataUri: string } | null>(null);
-
-  const handlePreview = (title: string) => {
-    const dataUri = buildPDF(title);
-    setPreview({ title, dataUri });
-  };
-
+  const handlePreview = (title: string) => setPreview({ title, dataUri: buildPDF(title) });
   return (
     <>
       <div className="space-y-4">
@@ -717,40 +487,103 @@ const ReportsPage = () => {
                 <p className="font-semibold text-sm text-brand-text-primary">{r.title}</p>
                 <p className="text-xs text-brand-text-secondary mt-0.5">{r.desc}</p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handlePreview(r.title)}
-                className="gap-1.5 text-[10px] uppercase font-bold tracking-widest w-full justify-center mt-auto"
-              >
+              <Button variant="ghost" size="sm" onClick={() => handlePreview(r.title)}
+                className="gap-1.5 text-[10px] uppercase font-bold tracking-widest w-full justify-center mt-auto">
                 <Download className="w-3 h-3" /> Preview & Download
               </Button>
             </Card>
           ))}
         </div>
       </div>
-
-      {preview && (
-        <PDFViewer
-          title={preview.title}
-          dataUri={preview.dataUri}
-          onClose={() => setPreview(null)}
-        />
-      )}
+      {preview && <PDFViewer title={preview.title} dataUri={preview.dataUri} onClose={() => setPreview(null)} />}
     </>
+  );
+};
+
+// ─── Settings Page ─────────────────────────────────────────────────────────────
+
+const SettingsPage = ({ profile }: { profile: any }) => {
+  const [notifOn, setNotifOn] = useState(true);
+  const [saved,   setSaved]   = useState(false);
+  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
+
+  return (
+    <div className="space-y-4">
+
+      {/* Org Code */}
+      <Card className="p-5 space-y-2 border border-brand-primary/20 bg-brand-primary/5">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Your Organisation Code</p>
+        <p className="text-[11px] text-brand-text-secondary">Share this with your staff so they can join your organisation.</p>
+        {profile?.orgCode ? (
+          <div className="flex items-center gap-3 mt-1">
+            <span className="font-mono text-2xl font-bold text-brand-primary tracking-widest">{profile.orgCode}</span>
+            <button onClick={() => navigator.clipboard.writeText(profile.orgCode)}
+              className="px-3 py-1.5 rounded-lg bg-brand-primary text-white text-xs font-bold hover:opacity-90 transition-opacity">
+              Copy
+            </button>
+          </div>
+        ) : (
+          <span className="text-sm text-amber-600 font-semibold">Pending approval — code will appear here once approved.</span>
+        )}
+      </Card>
+
+      {/* Profile */}
+      <Card className="p-5 space-y-3">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Profile</p>
+        {[
+          { label: 'Full Name',   value: profile?.fullName   ?? '' },
+          { label: 'Email',       value: profile?.email      ?? '' },
+          { label: 'Org Name',    value: profile?.orgName    ?? '' },
+          { label: 'Org Type',    value: profile?.orgType    ?? '' },
+          { label: 'Org Size',    value: profile?.orgSize    ?? '' },
+          { label: 'Reg. Number', value: profile?.regNum     ?? '' },
+          { label: 'Website',     value: profile?.orgWebsite ?? '' },
+        ].map(f => (
+          <div key={f.label} className="space-y-1">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">{f.label}</label>
+            <input defaultValue={f.value}
+              className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm" />
+          </div>
+        ))}
+      </Card>
+
+      {/* Staff permissions note */}
+      <Card className="p-5 space-y-3">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Staff Permissions</p>
+        <p className="text-xs text-brand-text-secondary">Manage individual staff task creation permissions in the <span className="font-semibold text-brand-primary">Staff Management</span> tab.</p>
+      </Card>
+
+      {/* Notifications */}
+      <Card className="p-5 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-brand-text-primary">Notifications</p>
+          <p className="text-xs text-brand-text-secondary mt-0.5">Task assignments and platform updates</p>
+        </div>
+        <button onClick={() => setNotifOn(v => !v)} className="flex items-center gap-2">
+          {notifOn
+            ? <><Wifi    className="w-5 h-5 text-brand-primary" /><span className="text-xs font-medium text-brand-primary">On</span></>
+            : <><WifiOff className="w-5 h-5 text-brand-text-secondary" /><span className="text-xs font-medium text-brand-text-secondary">Off</span></>}
+        </button>
+      </Card>
+
+      <Button className="w-full gap-2" onClick={save}>
+        {saved ? <><CheckCircle2 className="w-4 h-4" /> Saved!</> : <><Save className="w-4 h-4" /> Save Changes</>}
+      </Button>
+    </div>
   );
 };
 
 // ─── Nav ───────────────────────────────────────────────────────────────────────
 
 const NAV = [
-  { key: 'dashboard',  label: 'Dashboard',        icon: LayoutDashboard },
-  { key: 'tasks',      label: 'Tasks',             icon: ClipboardList },
-  { key: 'allocation', label: 'Allocation',        icon: GitBranch },
-  { key: 'staff',      label: 'Staff Management',  icon: Users },
-  { key: 'analytics',  label: 'Analytics',         icon: BarChart2 },
-  { key: 'log',        label: 'Activity Log',      icon: ScrollText },
-  { key: 'reports',    label: 'Reports',           icon: FileDown },
+  { key: 'dashboard',  label: 'Dashboard',       icon: LayoutDashboard },
+  { key: 'tasks',      label: 'Tasks',            icon: ClipboardList   },
+  { key: 'allocation', label: 'Allocation',       icon: GitBranch       },
+  { key: 'staff',      label: 'Staff Management', icon: Users           },
+  { key: 'analytics',  label: 'Analytics',        icon: BarChart2       },
+  { key: 'log',        label: 'Activity Log',     icon: ScrollText      },
+  { key: 'reports',    label: 'Reports',          icon: FileDown        },
+  { key: 'settings',   label: 'Settings',         icon: Settings        },
 ] as const;
 
 type NavKey = typeof NAV[number]['key'];
@@ -759,7 +592,14 @@ type NavKey = typeof NAV[number]['key'];
 
 export const OrgAdminDashboard = () => {
   const [active, setActive] = useState<NavKey>('dashboard');
-  const { user, initials, displayName } = useUser();
+  const { profile } = useAuth();
+  const navigate    = useNavigate();
+
+  const displayName = profile?.fullName ?? 'Org Admin';
+  const initials    = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+  const orgName     = profile?.orgName ?? 'Your Organisation';
+
+  const handleLogout = async () => { await logOut(); navigate('/login'); };
 
   const PageMap: Record<NavKey, ReactElement> = {
     dashboard:  <DashboardHome />,
@@ -769,11 +609,13 @@ export const OrgAdminDashboard = () => {
     analytics:  <AnalyticsPage />,
     log:        <ActivityLogPage />,
     reports:    <ReportsPage />,
+    settings:   <SettingsPage profile={profile} />,
   };
 
   const navLabel: Record<NavKey, string> = {
     dashboard: 'Dashboard', tasks: 'Tasks', allocation: 'Allocation',
-    staff: 'Staff Management', analytics: 'Analytics', log: 'Activity Log', reports: 'Reports',
+    staff: 'Staff Management', analytics: 'Analytics', log: 'Activity Log',
+    reports: 'Reports', settings: 'Settings',
   };
 
   return (
@@ -782,24 +624,16 @@ export const OrgAdminDashboard = () => {
       {/* ── Sidebar ── */}
       <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
         <div className="p-6 flex flex-col h-full">
-          <div className="mb-8">
-            <Logo />
-          </div>
+          <div className="mb-8"><Logo /></div>
           <div className="mb-6 px-4 py-3 bg-white/10 rounded-[8px]">
             <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Org Admin</p>
-            <p className="text-sm font-semibold text-white mt-0.5 truncate">{user.orgName}</p>
+            <p className="text-sm font-semibold text-white mt-0.5 truncate">{orgName}</p>
           </div>
           <nav className="flex-1 space-y-1 overflow-y-auto">
             {NAV.map(item => (
-              <button
-                key={item.key}
-                onClick={() => setActive(item.key)}
+              <button key={item.key} onClick={() => setActive(item.key)}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-[8px] transition-all text-left
-                  ${active === item.key
-                    ? 'bg-white/10 text-brand-accent font-semibold'
-                    : 'text-white/70 hover:bg-white/5 hover:text-white'
-                  }`}
-              >
+                  ${active === item.key ? 'bg-white/10 text-brand-accent font-semibold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
                 <item.icon className="w-5 h-5 shrink-0" />
                 <span className="font-medium text-sm">{item.label}</span>
               </button>
@@ -807,17 +641,14 @@ export const OrgAdminDashboard = () => {
           </nav>
           <div className="pt-6 border-t border-white/10 mt-auto space-y-3">
             <div className="flex items-center gap-3 px-4">
-              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">
-                {initials}
-              </div>
+              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">{initials}</div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-white truncate">{displayName}</p>
-                <p className="text-[10px] text-white/50 capitalize">{user.role}</p>
+                <p className="text-[10px] text-white/50">Org Admin</p>
               </div>
             </div>
-            <button className="flex items-center gap-3 px-4 py-2.5 w-full text-white/70 hover:text-white hover:bg-white/5 rounded-[8px] transition-all">
-              <LogOut className="w-5 h-5" />
-              <span className="font-medium text-sm">Logout</span>
+            <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2.5 w-full text-white/70 hover:text-white hover:bg-white/5 rounded-[8px] transition-all">
+              <LogOut className="w-5 h-5" /><span className="font-medium text-sm">Logout</span>
             </button>
           </div>
         </div>
