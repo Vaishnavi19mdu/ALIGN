@@ -20,7 +20,7 @@ import { SuperAdminDashboard } from './pages/dashboard/SuperAdminDashboard';
 import { useAuth } from './context/AuthContext';
 import { signIn } from './lib/authService';
 
-const ORG_ROUTES = ['/org-admin', '/org-staff', '/superadmin'];
+const ORG_ROUTES = ['/org-admin', '/org-staff', '/superadmin', '/volunteer'];
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
