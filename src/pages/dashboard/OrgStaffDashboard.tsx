@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, CheckSquare, MessageSquare, BookOpen,
   CheckCircle2, XCircle, Star, Send, Plus, LogOut, ShieldCheck, ShieldOff,
-  Loader2, X, AlertCircle,
+  Loader2, X, AlertCircle, FileDown,
 } from 'lucide-react';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -51,14 +51,42 @@ const collabPosts = [
   { user: 'Divya P.',   time: 'Yesterday', message: 'Great job team — T-199 completed ahead of schedule.' },
 ];
 
-const resources = [
-  { title: 'How to verify task completion',   type: 'Guide', icon: '📋' },
-  { title: 'Volunteer onboarding guidelines', type: 'PDF',   icon: '📄' },
-  { title: 'Emergency response protocol',     type: 'Guide', icon: '🚨' },
-  { title: 'FAQs — Common staff queries',     type: 'FAQ',   icon: '❓' },
-];
+// ─── Resources data with real PDFs ────────────────────────────────────────────
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+const resources = [
+  {
+    title: 'How to Verify Task Completion',
+    type: 'Guide',
+    icon: '📋',
+    desc: 'Step-by-step process for reviewing and approving volunteer-submitted task completions.',
+    pdfUrl: 'https://drive.google.com/file/d/1KHer_oOP9HoEmyQs58MugiFRl5JWWnlB/preview',
+    color: 'bg-brand-primary/10 text-brand-primary',
+  },
+  {
+    title: 'Volunteer Onboarding Guidelines',
+    type: 'PDF',
+    icon: '📄',
+    desc: 'Everything a new volunteer needs to know — roles, responsibilities, and first steps.',
+    pdfUrl: 'https://drive.google.com/file/d/1GulUam079-bcAdGz3lS7ApSC-la8aa83/preview',
+    color: 'bg-blue-50 text-blue-600',
+  },
+  {
+    title: 'Emergency Response Protocol',
+    type: 'Guide',
+    icon: '🚨',
+    desc: 'Critical procedures for flood relief, medical emergencies, and disaster response.',
+    pdfUrl: 'https://drive.google.com/file/d/1JraXuNBOAohCKqwHzmgFF6q9mAv2xkJc/preview',
+    color: 'bg-red-50 text-red-500',
+  },
+  {
+    title: 'FAQs — Common Staff Queries',
+    type: 'FAQ',
+    icon: '❓',
+    desc: 'Answers to the most common questions raised by org staff across all modules.',
+    pdfUrl: 'https://drive.google.com/file/d/1X50J5bCei2AGc3cKH88Bwehu-spH1gJI/preview',
+    color: 'bg-amber-50 text-amber-600',
+  },
+];// ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const statusStyle = (s: string) => {
   if (s === 'Completed')   return 'bg-green-100 text-green-700';
@@ -131,7 +159,6 @@ const CreateTaskModal = ({
           transition={{ type: 'spring', stiffness: 340, damping: 30 }}
           onClick={e => e.stopPropagation()}
         >
-          {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-black/5 bg-brand-primary">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">New Task</p>
@@ -143,7 +170,6 @@ const CreateTaskModal = ({
             </button>
           </div>
 
-          {/* Body */}
           {done ? (
             <div className="flex flex-col items-center justify-center gap-3 py-14">
               <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center">
@@ -159,8 +185,6 @@ const CreateTaskModal = ({
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
                 </div>
               )}
-
-              {/* Title */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">
                   Task Title <span className="text-red-400">*</span>
@@ -172,8 +196,6 @@ const CreateTaskModal = ({
                   className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
                 />
               </div>
-
-              {/* Description */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Description</label>
                 <textarea
@@ -184,8 +206,6 @@ const CreateTaskModal = ({
                   className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors resize-none"
                 />
               </div>
-
-              {/* Priority + Category row */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Priority</label>
@@ -209,8 +229,6 @@ const CreateTaskModal = ({
                   />
                 </div>
               </div>
-
-              {/* Deadline */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Deadline</label>
                 <input
@@ -220,12 +238,8 @@ const CreateTaskModal = ({
                   className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
                 />
               </div>
-
-              {/* Actions */}
               <div className="flex gap-3 pt-1">
-                <Button variant="ghost" size="sm" onClick={onClose} className="flex-1">
-                  Cancel
-                </Button>
+                <Button variant="ghost" size="sm" onClick={onClose} className="flex-1">Cancel</Button>
                 <Button size="sm" onClick={handleSubmit} disabled={saving} className="flex-1 gap-1.5">
                   {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : <><Plus className="w-3.5 h-3.5" /> Create Task</>}
                 </Button>
@@ -443,24 +457,130 @@ const CollabPage = () => {
   );
 };
 
-const ResourcesPage = () => (
-  <div className="space-y-4">
-    <h2 className="text-base font-heading font-bold">Training & Resources</h2>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {resources.map((r, i) => (
-        <Card key={i} className="p-5 flex items-start gap-4 hover:border-brand-primary/30 transition-colors cursor-pointer">
-          <div className="text-2xl shrink-0">{r.icon}</div>
-          <div>
-            <p className="font-semibold text-sm text-brand-text-primary">{r.title}</p>
-            <span className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-brand-primary/10 text-brand-primary">{r.type}</span>
-          </div>
-        </Card>
-      ))}
-    </div>
-  </div>
-);
+// ─── PDF Preview Modal ─────────────────────────────────────────────────────────
 
-// ─── Nav — Create Task appears conditionally ──────────────────────────────────
+const ResourcePDFModal = ({
+  resource,
+  onClose,
+}: {
+  resource: typeof resources[number];
+  onClose: () => void;
+}) => {
+  const handleDownload = () => {
+  const fileId = resource.pdfUrl.split('/d/')[1].split('/')[0];
+  const a = document.createElement('a');
+  a.href = `https://drive.google.com/uc?export=download&id=${fileId}`;
+  a.download = `${resource.title.replace(/\s+/g, '_')}.pdf`;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose}
+      >
+        <motion.div
+          className="relative bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ width: '90vw', maxWidth: 860, height: '88vh' }}
+          initial={{ scale: 0.93, opacity: 0, y: 20 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.93, opacity: 0, y: 20 }}
+          transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/8 bg-brand-background shrink-0">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">{resource.icon}</span>
+              <div>
+                <p className="text-sm font-heading font-bold text-brand-text-primary leading-tight">{resource.title}</p>
+                <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${resource.color}`}>
+                  {resource.type}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={handleDownload} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+                <FileDown className="w-3 h-3" /> Download
+              </Button>
+              <button
+                onClick={onClose}
+                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/8 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* PDF iframe */}
+          <div className="flex-1 bg-neutral-200 overflow-hidden">
+            <iframe
+              src={resource.pdfUrl}
+              className="w-full h-full border-0"
+              title={resource.title}
+            />
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+// ─── Resources Page ────────────────────────────────────────────────────────────
+
+const ResourcesPage = () => {
+  const [selected, setSelected] = useState<typeof resources[number] | null>(null);
+
+  return (
+    <>
+      <div className="space-y-4">
+        <h2 className="text-base font-heading font-bold">Training & Resources</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {resources.map((r, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.07 }}
+            >
+              <Card
+                className="p-5 flex items-start gap-4 hover:border-brand-primary/30 hover:shadow-md transition-all cursor-pointer group"
+                onClick={() => setSelected(r)}
+              >
+                <div className="text-2xl shrink-0 mt-0.5">{r.icon}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm text-brand-text-primary group-hover:text-brand-primary transition-colors">
+                    {r.title}
+                  </p>
+                  <p className="text-[11px] text-brand-text-secondary mt-1 leading-relaxed">{r.desc}</p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${r.color}`}>
+                      {r.type}
+                    </span>
+                    <span className="text-[10px] text-brand-primary font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                      <FileDown className="w-2.5 h-2.5" /> Open PDF →
+                    </span>
+                  </div>
+                </div>
+              </Card>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+
+      {selected && (
+        <ResourcePDFModal resource={selected} onClose={() => setSelected(null)} />
+      )}
+    </>
+  );
+};
+
+// ─── Nav ───────────────────────────────────────────────────────────────────────
 
 const BASE_NAV = [
   { key: 'dashboard', label: 'Dashboard',     icon: LayoutDashboard },
@@ -481,7 +601,6 @@ export const OrgStaffDashboard = () => {
   const { profile, user } = useAuth();
   const navigate = useNavigate();
 
-  // Real-time canCreateTask listener
   const [canCreateTask, setCanCreateTask] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -491,8 +610,6 @@ export const OrgStaffDashboard = () => {
     });
   }, [user?.uid]);
 
-  // Resolve org name: staff docs don't store orgName directly.
-  // Look it up from the admin whose orgCode matches this staff's orgCodeUsed.
   const [resolvedOrgName, setResolvedOrgName] = useState<string>('');
 
   useEffect(() => {
@@ -514,11 +631,9 @@ export const OrgStaffDashboard = () => {
   const initials = (profile?.fullName ?? 'OS')
     .split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
   const displayName = profile?.fullName ?? 'Org Staff';
-  // Fix TS error: guarantee string
   const orgCode = profile?.orgCodeUsed ?? profile?.orgCode ?? '';
 
   const permissionLoading = canCreateTask === null;
-
   const openCreateTask = () => setShowCreateModal(true);
 
   const PageMap: Record<Exclude<NavKey, 'create_task'>, ReactElement> = {
@@ -536,38 +651,16 @@ export const OrgStaffDashboard = () => {
 
   return (
     <>
-      {/* ── Themed scrollbar styles ── */}
       <style>{`
-        .themed-scroll {
-          scroll-behavior: smooth;
-        }
-        .themed-scroll::-webkit-scrollbar {
-          width: 6px;
-          height: 6px;
-        }
-        .themed-scroll::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .themed-scroll::-webkit-scrollbar-thumb {
-          background: rgba(124, 58, 237, 0.25);
-          border-radius: 99px;
-        }
-        .themed-scroll::-webkit-scrollbar-thumb:hover {
-          background: rgba(124, 58, 237, 0.5);
-        }
-        .sidebar-scroll::-webkit-scrollbar {
-          width: 4px;
-        }
-        .sidebar-scroll::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .sidebar-scroll::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.15);
-          border-radius: 99px;
-        }
-        .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
+        .themed-scroll { scroll-behavior: smooth; }
+        .themed-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .themed-scroll::-webkit-scrollbar-track { background: transparent; }
+        .themed-scroll::-webkit-scrollbar-thumb { background: rgba(124, 58, 237, 0.25); border-radius: 99px; }
+        .themed-scroll::-webkit-scrollbar-thumb:hover { background: rgba(124, 58, 237, 0.5); }
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 99px; }
+        .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
       `}</style>
 
       <div className="flex h-screen bg-brand-background overflow-hidden">
@@ -599,7 +692,6 @@ export const OrgStaffDashboard = () => {
                 </button>
               ))}
 
-              {/* Create Task — shown only when permitted */}
               {canCreateTask && (
                 <motion.button
                   initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
@@ -683,7 +775,6 @@ export const OrgStaffDashboard = () => {
               {item.label.split(' ')[0]}
             </button>
           ))}
-          {/* Mobile create task FAB-style if permitted */}
           {canCreateTask && (
             <button onClick={openCreateTask}
               className="flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors text-brand-accent">
@@ -700,7 +791,6 @@ export const OrgStaffDashboard = () => {
               <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Staff</p>
               <h1 className="text-lg font-heading font-bold text-brand-text-primary">{navLabel[active]}</h1>
             </div>
-            {/* Quick create button in header if permitted */}
             {canCreateTask && (
               <Button size="sm" onClick={openCreateTask} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest hidden md:flex">
                 <Plus className="w-3 h-3" /> Create Task
@@ -719,7 +809,6 @@ export const OrgStaffDashboard = () => {
         </main>
       </div>
 
-      {/* Create Task Modal */}
       {showCreateModal && (
         <CreateTaskModal
           onClose={() => setShowCreateModal(false)}
