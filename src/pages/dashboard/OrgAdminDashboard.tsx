@@ -4,7 +4,7 @@ import {
   LayoutDashboard, ClipboardList, GitBranch, Users, BarChart2,
   ScrollText, FileDown, Sparkles, Plus, ToggleLeft, ToggleRight,
   Download, LogOut, X, Settings, CheckCircle2, Save, Wifi, WifiOff,
-  UserCheck, Bell, ChevronDown, Loader2,
+  UserCheck, Bell, ChevronDown, Loader2, AlertCircle,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import {
@@ -45,6 +45,15 @@ interface ActivityLogEntry {
   createdAt: any;
 }
 
+interface AllocationRow {
+  task: string;
+  volunteer: string;
+  skill: number;
+  reliability: number;
+  distance: number;
+  backups: string[];
+}
+
 // ─── Dummy data ────────────────────────────────────────────────────────────────
 
 const kpis = [
@@ -62,7 +71,7 @@ const tasks = [
   { id: 'T-205', title: 'Tree Planting Drive',   impact: 63, status: 'Open',        assignedTo: 'Unassigned', createdBy: 'Admin' },
 ];
 
-const allocationData = [
+const allocationData: AllocationRow[] = [
   { task: 'Food Kit Distribution', volunteer: 'Anjali R.', skill: 94, reliability: 88, distance: 2.1, backups: ['Mohan D.', 'Sneha T.'] },
   { task: 'Community Teaching',    volunteer: 'Ravi M.',   skill: 89, reliability: 92, distance: 3.4, backups: ['Aditi K.'] },
   { task: 'Medical Camp Setup',    volunteer: 'Priya S.',  skill: 97, reliability: 85, distance: 1.8, backups: ['Suresh P.', 'Lakshmi V.'] },
@@ -109,33 +118,185 @@ const pieColors = ['#7c3aed', '#f59e0b', '#10b981', '#6b7280'];
 
 const buildPDF = (title: string): string => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const PAGE_W = 210; const PAGE_H = 297; const MARGIN = 18; const CONTENT_W = PAGE_W - MARGIN * 2;
-  const timestamp = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-  const hex = (h: string): [number, number, number] => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
-  const setColor = (color: string, type: 'fill'|'text'|'draw' = 'fill') => {
-    const [r,g,b] = hex(color);
-    if (type==='fill') doc.setFillColor(r,g,b);
-    if (type==='text') doc.setTextColor(r,g,b);
-    if (type==='draw') doc.setDrawColor(r,g,b);
+  const PAGE_W = 210;
+  const PAGE_H = 297;
+  const MARGIN = 18;
+  const CONTENT_W = PAGE_W - MARGIN * 2;
+  const timestamp = new Date().toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
+
+  const hex = (h: string): [number, number, number] => [
+    parseInt(h.slice(1, 3), 16),
+    parseInt(h.slice(3, 5), 16),
+    parseInt(h.slice(5, 7), 16),
+  ];
+  const setColor = (color: string, type: 'fill' | 'text' | 'draw' = 'fill') => {
+    const [r, g, b] = hex(color);
+    if (type === 'fill') doc.setFillColor(r, g, b);
+    if (type === 'text') doc.setTextColor(r, g, b);
+    if (type === 'draw') doc.setDrawColor(r, g, b);
   };
+
   const drawHeader = () => {
-    setColor('#7c3aed','fill'); doc.rect(0,0,PAGE_W,36,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(16); setColor('#ffffff','text'); doc.text(title.toUpperCase(),MARGIN,16);
-    doc.setFont('helvetica','normal'); doc.setFontSize(8); setColor('#e9d5ff','text');
-    doc.text('Impact Global NGO',MARGIN,23); doc.text(`Generated: ${timestamp}`,MARGIN,29);
+    setColor('#7c3aed', 'fill');
+    doc.rect(0, 0, PAGE_W, 36, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    setColor('#ffffff', 'text');
+    doc.text(title.toUpperCase(), MARGIN, 16);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    setColor('#e9d5ff', 'text');
+    doc.text('Impact Global NGO', MARGIN, 23);
+    doc.text(`Generated: ${timestamp}`, MARGIN, 29);
   };
+
   const drawFooter = () => {
-    setColor('#f3f4f6','fill'); doc.rect(0,PAGE_H-14,PAGE_W,14,'F');
-    doc.setFont('helvetica','normal'); doc.setFontSize(7); setColor('#6b7280','text');
-    doc.text('Impact Global NGO — Confidential',MARGIN,PAGE_H-5);
-    doc.text('Page 1',PAGE_W-MARGIN,PAGE_H-5,{align:'right'});
+    setColor('#f3f4f6', 'fill');
+    doc.rect(0, PAGE_H - 14, PAGE_W, 14, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    setColor('#6b7280', 'text');
+    doc.text('Impact Global NGO — Confidential', MARGIN, PAGE_H - 5);
+    doc.text('Page 1', PAGE_W - MARGIN, PAGE_H - 5, { align: 'right' });
   };
-  const sectionHeading = (text: string, y: number) => {
-    setColor('#7c3aed','fill'); doc.rect(MARGIN,y,CONTENT_W,7,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(8.5); setColor('#ffffff','text'); doc.text(text,MARGIN+3,y+5); return y+12;
+
+  const sectionHeading = (text: string, y: number): number => {
+    setColor('#7c3aed', 'fill');
+    doc.rect(MARGIN, y, CONTENT_W, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    setColor('#ffffff', 'text');
+    doc.text(text, MARGIN + 3, y + 5);
+    return y + 12;
   };
-  void sectionHeading; // suppress unused warning
-  drawHeader(); drawFooter();
+
+  const drawTable = (
+    headers: string[],
+    rows: string[][],
+    colWidths: number[],
+    startY: number,
+  ): number => {
+    const ROW_H = 7;
+    let y = startY;
+
+    // Header row
+    setColor('#ede9fe', 'fill');
+    doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    setColor('#5b21b6', 'text');
+    let x = MARGIN + 2;
+    headers.forEach((h, i) => {
+      doc.text(h, x, y + 5);
+      x += colWidths[i];
+    });
+    y += ROW_H;
+
+    // Data rows
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    rows.forEach((row, ri) => {
+      setColor(ri % 2 === 0 ? '#faf9ff' : '#ffffff', 'fill');
+      doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
+      setColor('#374151', 'text');
+      x = MARGIN + 2;
+      row.forEach((cell, i) => {
+        doc.text(String(cell), x, y + 5);
+        x += colWidths[i];
+      });
+      setColor('#e5e7eb', 'draw');
+      doc.setLineWidth(0.2);
+      doc.line(MARGIN, y + ROW_H, MARGIN + CONTENT_W, y + ROW_H);
+      y += ROW_H;
+    });
+
+    // Outer border
+    setColor('#d8b4fe', 'draw');
+    doc.setLineWidth(0.4);
+    doc.rect(MARGIN, startY, CONTENT_W, y - startY, 'S');
+
+    return y + 5;
+  };
+
+  drawHeader();
+  drawFooter();
+
+  // ── TASK SUMMARY ─────────────────────────────────────────────────────────────
+  if (title === 'Task Summary') {
+    let y = 46;
+
+    y = sectionHeading('KPI Summary', y);
+    const kpiHeaders = ['Metric', 'Value', 'Note'];
+    const kpiRows = kpis.map(k => [k.label, k.value, k.sub]);
+    const kpiWidths = [65, 30, CONTENT_W - 95];
+    y = drawTable(kpiHeaders, kpiRows, kpiWidths, y);
+
+    y += 4;
+
+    y = sectionHeading('Task Details', y);
+    const taskHeaders = ['ID', 'Title', 'Impact', 'Status', 'Assigned To', 'Created By'];
+    const taskRows = tasks.map(t => [
+      t.id, t.title, String(t.impact), t.status, t.assignedTo, t.createdBy,
+    ]);
+    const taskWidths = [18, 45, 16, 24, 28, CONTENT_W - 131];
+    y = drawTable(taskHeaders, taskRows, taskWidths, y);
+  }
+
+  // ── ASSIGNMENT LIST ──────────────────────────────────────────────────────────
+  else if (title === 'Assignment List') {
+    let y = 46;
+
+    y = sectionHeading('Volunteer Allocation', y);
+    const allocHeaders = ['Task', 'Volunteer', 'Skill %', 'Reliability %', 'Distance (km)', 'Backups'];
+    const allocRows = allocationData.map(r => [
+      r.task,
+      r.volunteer,
+      String(r.skill),
+      String(r.reliability),
+      String(r.distance),
+      r.backups.join(', ') || '—',
+    ]);
+    const allocWidths = [44, 28, 18, 24, 26, CONTENT_W - 140];
+    y = drawTable(allocHeaders, allocRows, allocWidths, y);
+
+    y += 4;
+
+    y = sectionHeading('Recent Activity Log', y);
+    const logHeaders = ['Time', 'User', 'Action'];
+    const logRows = activityLog.map(e => [e.time, e.user, e.action]);
+    const logWidths = [22, 28, CONTENT_W - 50];
+    y = drawTable(logHeaders, logRows, logWidths, y);
+  }
+
+  // ── ANALYTICS SNAPSHOT ───────────────────────────────────────────────────────
+  else if (title === 'Analytics Snapshot') {
+    let y = 46;
+
+    y = sectionHeading('Task Completion Rate — This Week', y);
+    const compHeaders = ['Day', 'Completion Rate (%)'];
+    const compRows = analyticsCompletion.map(d => [d.label, String(d.val)]);
+    const compWidths = [40, CONTENT_W - 40];
+    y = drawTable(compHeaders, compRows, compWidths, y);
+
+    y += 4;
+
+    y = sectionHeading('Volunteer Activity by Category', y);
+    const volHeaders = ['Category', 'Share (%)'];
+    const volRows = analyticsVolunteer.map(d => [d.label, String(d.val)]);
+    const volWidths = [60, CONTENT_W - 60];
+    y = drawTable(volHeaders, volRows, volWidths, y);
+
+    y += 4;
+
+    y = sectionHeading('Recent Activity Log', y);
+    const logHeaders = ['Time', 'User', 'Action'];
+    const logRows = activityLog.map(e => [e.time, e.user, e.action]);
+    const logWidths = [22, 28, CONTENT_W - 50];
+    y = drawTable(logHeaders, logRows, logWidths, y);
+  }
+
   return doc.output('datauristring');
 };
 
@@ -200,16 +361,22 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
 
   const approve = async (s: PendingStaff) => {
     setActing(s.uid);
-    await updateDoc(doc(db, 'users', s.uid), { status: 'approved', resolvedAt: serverTimestamp() });
-    setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'approved' }]);
-    setActing(null);
+    try {
+      await updateDoc(doc(db, 'users', s.uid), { status: 'approved', resolvedAt: serverTimestamp() });
+      setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'approved' }]);
+    } finally {
+      setActing(null);
+    }
   };
 
   const reject = async (s: PendingStaff) => {
     setActing(s.uid);
-    await updateDoc(doc(db, 'users', s.uid), { status: 'rejected', resolvedAt: serverTimestamp() });
-    setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'rejected' }]);
-    setActing(null);
+    try {
+      await updateDoc(doc(db, 'users', s.uid), { status: 'rejected', resolvedAt: serverTimestamp() });
+      setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'rejected' }]);
+    } finally {
+      setActing(null);
+    }
   };
 
   if (loading) return (
@@ -324,7 +491,7 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
   );
 };
 
-// ─── Task Permissions Panel (fetches real org staff from Firestore) ─────────────
+// ─── Task Permissions Panel ────────────────────────────────────────────────────
 
 const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
   const [staffMembers, setStaffMembers] = useState<OrgStaffMember[]>([]);
@@ -352,11 +519,17 @@ const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
   }, [orgCode]);
 
   const togglePermission = async (member: OrgStaffMember) => {
+    if (toggling) return;
     setToggling(member.uid);
-    await updateDoc(doc(db, 'users', member.uid), {
-      canCreateTask: !member.canCreateTask,
-    });
-    setToggling(null);
+    const next = !member.canCreateTask;
+    setStaffMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, canCreateTask: next } : m));
+    try {
+      await updateDoc(doc(db, 'users', member.uid), { canCreateTask: next });
+    } catch {
+      setStaffMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, canCreateTask: !next } : m));
+    } finally {
+      setToggling(null);
+    }
   };
 
   if (loading) return (
@@ -457,14 +630,13 @@ const DashboardHome = () => (
   </div>
 );
 
-// ─── Tasks Page — now includes Task Permissions section ───────────────────────
+// ─── Tasks Page ───────────────────────────────────────────────────────────────
 
 const TasksPage = ({ orgCode }: { orgCode: string }) => {
   const [showPermissions, setShowPermissions] = useState(false);
 
   return (
     <div className="space-y-6">
-      {/* Tasks table */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-heading font-bold">All Tasks</h2>
@@ -506,7 +678,6 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
         </Card>
       </div>
 
-      {/* Task Permissions collapsible panel */}
       <AnimatePresence>
         {showPermissions && (
           <motion.div
@@ -536,50 +707,198 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
   );
 };
 
-const AllocationPage = () => (
-  <div className="space-y-4">
-    <div className="flex items-center justify-between">
-      <h2 className="text-base font-heading font-bold">Allocation View</h2>
-      <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Sparkles className="w-3 h-3" /> Re-run Auto Assign</Button>
+// ─── Reassign Panel ────────────────────────────────────────────────────────────
+
+const ReassignPanel = ({
+  row,
+  onConfirm,
+  onCancel,
+}: {
+  row: AllocationRow;
+  onConfirm: (newVolunteer: string) => void;
+  onCancel: () => void;
+}) => {
+  const options = row.backups;
+  const [selected, setSelected] = useState(options[0] ?? '');
+  const [custom,   setCustom]   = useState('');
+  const useCustom = options.length === 0;
+  const finalValue = useCustom ? custom.trim() : selected;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.2 }}
+      className="overflow-hidden"
+    >
+      <div className="px-5 pb-5 pt-4 border-t border-black/5 bg-brand-background/40 space-y-3">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-brand-text-secondary">
+          Reassign · {row.task}
+        </p>
+
+        {useCustom ? (
+          <input
+            value={custom}
+            onChange={e => setCustom(e.target.value)}
+            placeholder="Enter volunteer name…"
+            className="w-full px-3 py-2 rounded-lg border border-black/10 focus:border-brand-primary outline-none text-sm bg-white"
+          />
+        ) : (
+          <div className="space-y-1.5">
+            {options.map(opt => (
+              <label key={opt} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-black/8 bg-white hover:border-brand-primary/30 cursor-pointer transition-colors">
+                <input
+                  type="radio"
+                  name={`reassign-${row.task}`}
+                  value={opt}
+                  checked={selected === opt}
+                  onChange={() => setSelected(opt)}
+                  className="accent-brand-primary"
+                />
+                <span className="text-sm font-medium text-brand-text-primary">{opt}</span>
+                <span className="ml-auto text-[10px] text-brand-text-secondary">Backup volunteer</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-3 pt-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            className="flex-1 text-[10px] uppercase font-bold tracking-widest"
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => { if (finalValue) onConfirm(finalValue); }}
+            disabled={!finalValue}
+            className="flex-1 gap-1.5 text-[10px] uppercase font-bold tracking-widest"
+          >
+            <CheckCircle2 className="w-3 h-3" /> Confirm Reassign
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ─── Allocation Page ───────────────────────────────────────────────────────────
+
+const AllocationPage = () => {
+  const [rows, setRows] = useState<AllocationRow[]>(allocationData);
+  const [reassigning, setReassigning] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<{ task: string; from: string; to: string }[]>([]);
+
+  const handleConfirm = (task: string, newVolunteer: string) => {
+    const old = rows.find(r => r.task === task)?.volunteer ?? '';
+    setRows(prev => prev.map(r => {
+      if (r.task !== task) return r;
+      const newBackups = [r.volunteer, ...r.backups.filter(b => b !== newVolunteer)];
+      return { ...r, volunteer: newVolunteer, backups: newBackups };
+    }));
+    setToasts(prev => [...prev, { task, from: old, to: newVolunteer }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.task !== task)), 3500);
+    setReassigning(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-heading font-bold">Allocation View</h2>
+        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+          <Sparkles className="w-3 h-3" /> Re-run Auto Assign
+        </Button>
+      </div>
+
+      <AnimatePresence>
+        {toasts.map(t => (
+          <motion.div
+            key={t.task}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700"
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-green-500" />
+            <span>
+              <span className="font-semibold">{t.task}</span> reassigned from{' '}
+              <span className="font-semibold">{t.from}</span> to{' '}
+              <span className="font-semibold">{t.to}</span>
+            </span>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+
+      <div className="space-y-3">
+        {rows.map((row, i) => (
+          <motion.div key={row.task} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}>
+            <Card className="overflow-hidden">
+              <div className="flex flex-col md:flex-row md:items-center gap-4 p-5">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-brand-text-primary mb-0.5">{row.task}</p>
+                  <p className="text-xs text-brand-text-secondary">
+                    Assigned → <span className="font-semibold text-brand-primary">{row.volunteer}</span>
+                  </p>
+                </div>
+                <div className="flex gap-4 flex-wrap">
+                  {[
+                    { label: 'Skill Match',   val: row.skill,       color: 'text-brand-primary', suffix: '%'   },
+                    { label: 'Reliability',   val: row.reliability, color: 'text-green-600',     suffix: '%'   },
+                    { label: 'Distance (km)', val: row.distance,    color: 'text-blue-600',      suffix: ' km' },
+                  ].map(m => (
+                    <div key={m.label} className="text-center">
+                      <p className={`text-lg font-bold ${m.color}`}>{m.val}{m.suffix}</p>
+                      <p className="text-[10px] text-brand-text-secondary uppercase tracking-wide">{m.label}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-1 min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Backups</p>
+                  {row.backups.length > 0
+                    ? row.backups.map(b => <span key={b} className="text-xs text-brand-text-secondary">{b}</span>)
+                    : <span className="text-xs text-brand-text-secondary italic">None</span>
+                  }
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`text-[10px] h-7 px-3 shrink-0 transition-colors ${
+                    reassigning === row.task ? 'text-brand-primary bg-brand-primary/5 border border-brand-primary/20' : ''
+                  }`}
+                  onClick={() => setReassigning(prev => prev === row.task ? null : row.task)}
+                >
+                  {reassigning === row.task ? 'Cancel' : 'Reassign'}
+                </Button>
+              </div>
+
+              <AnimatePresence>
+                {reassigning === row.task && (
+                  <ReassignPanel
+                    row={row}
+                    onConfirm={(newVol) => handleConfirm(row.task, newVol)}
+                    onCancel={() => setReassigning(null)}
+                  />
+                )}
+              </AnimatePresence>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
     </div>
-    <div className="space-y-3">
-      {allocationData.map((row, i) => (
-        <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}>
-          <Card className="p-5">
-            <div className="flex flex-col md:flex-row md:items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-sm text-brand-text-primary mb-0.5">{row.task}</p>
-                <p className="text-xs text-brand-text-secondary">Assigned → <span className="font-semibold text-brand-primary">{row.volunteer}</span></p>
-              </div>
-              <div className="flex gap-4 flex-wrap">
-                {[
-                  { label: 'Skill Match',   val: row.skill,       color: 'text-brand-primary', suffix: '%' },
-                  { label: 'Reliability',   val: row.reliability, color: 'text-green-600',     suffix: '%' },
-                  { label: 'Distance (km)', val: row.distance,    color: 'text-blue-600',      suffix: ' km' },
-                ].map(m => (
-                  <div key={m.label} className="text-center">
-                    <p className={`text-lg font-bold ${m.color}`}>{m.val}{m.suffix}</p>
-                    <p className="text-[10px] text-brand-text-secondary uppercase tracking-wide">{m.label}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="flex flex-col gap-1 min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Backups</p>
-                {row.backups.map(b => <span key={b} className="text-xs text-brand-text-secondary">{b}</span>)}
-              </div>
-              <Button variant="ghost" size="sm" className="text-[10px] h-7 px-3 shrink-0">Reassign</Button>
-            </div>
-          </Card>
-        </motion.div>
-      ))}
-    </div>
-  </div>
-);
+  );
+};
+
+// ─── Staff Management Page ─────────────────────────────────────────────────────
 
 const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
-  const [members, setMembers]   = useState<OrgStaffMember[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [toggling, setToggling] = useState<string | null>(null);
+  const [members,     setMembers]     = useState<OrgStaffMember[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [toggling,    setToggling]    = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!orgCode) return;
@@ -603,19 +922,36 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
   }, [orgCode]);
 
   const togglePerm = async (m: OrgStaffMember) => {
+    if (toggling) return;
     setToggling(m.uid);
+    setToggleError(null);
+
     const next = !m.canCreateTask;
-    await updateDoc(doc(db, 'users', m.uid), { canCreateTask: next });
-    // Write activity log entry
-    await addDoc(collection(db, 'activityLogs'), {
-      orgCode,
-      user:      'Admin',
-      action:    next
-        ? `Gave task creation permission to ${m.fullName}`
-        : `Revoked task creation for ${m.fullName}`,
-      createdAt: serverTimestamp(),
-    });
-    setToggling(null);
+    setMembers(prev => prev.map(x => x.uid === m.uid ? { ...x, canCreateTask: next } : x));
+
+    try {
+      await updateDoc(doc(db, 'users', m.uid), { canCreateTask: next });
+    } catch (err: any) {
+      setMembers(prev => prev.map(x => x.uid === m.uid ? { ...x, canCreateTask: !next } : x));
+      setToggleError(`Failed to update ${m.fullName}. Please try again.`);
+      setToggling(null);
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'activityLogs'), {
+        orgCode,
+        user:      'Admin',
+        action:    next
+          ? `Gave task creation permission to ${m.fullName}`
+          : `Revoked task creation for ${m.fullName}`,
+        createdAt: serverTimestamp(),
+      });
+    } catch {
+      // silently ignore log failures
+    } finally {
+      setToggling(null);
+    }
   };
 
   if (loading) return (
@@ -630,6 +966,12 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
         <h2 className="text-base font-heading font-bold">Staff Management</h2>
         <span className="text-xs text-brand-text-secondary">{members.length} member{members.length !== 1 ? 's' : ''}</span>
       </div>
+
+      {toggleError && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {toggleError}
+        </div>
+      )}
 
       {members.length === 0 ? (
         <Card className="p-10 flex flex-col items-center gap-3 text-center">
@@ -650,8 +992,13 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
               </thead>
               <tbody className="divide-y divide-black/5 text-brand-text-primary">
                 {members.map((m, i) => (
-                  <motion.tr key={m.uid} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                    className="hover:bg-brand-background/30 transition-colors">
+                  <motion.tr
+                    key={m.uid}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    className="hover:bg-brand-background/30 transition-colors"
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary shrink-0">
@@ -666,14 +1013,16 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
                       <button
                         onClick={() => togglePerm(m)}
                         disabled={toggling === m.uid}
-                        className="flex items-center gap-2 text-xs font-medium transition-colors"
+                        className="flex items-center gap-2 text-xs font-medium transition-colors disabled:opacity-60"
+                        aria-label={m.canCreateTask ? 'Disable task creation' : 'Enable task creation'}
                       >
-                        {toggling === m.uid
-                          ? <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
-                          : m.canCreateTask
-                            ? <><ToggleRight className="w-6 h-6 text-brand-primary" /><span className="text-brand-primary">Enabled</span></>
-                            : <><ToggleLeft className="w-6 h-6 text-brand-text-secondary" /><span className="text-brand-text-secondary">Disabled</span></>
-                        }
+                        {toggling === m.uid ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
+                        ) : m.canCreateTask ? (
+                          <><ToggleRight className="w-6 h-6 text-brand-primary" /><span className="text-brand-primary">Enabled</span></>
+                        ) : (
+                          <><ToggleLeft className="w-6 h-6 text-brand-text-secondary" /><span className="text-brand-text-secondary">Disabled</span></>
+                        )}
                       </button>
                     </td>
                     <td className="px-4 py-3">
@@ -689,6 +1038,8 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
     </div>
   );
 };
+
+// ─── Analytics Page ────────────────────────────────────────────────────────────
 
 const AnalyticsPage = () => {
   const maxBar = Math.max(...analyticsCompletion.map(d => d.val));
@@ -740,6 +1091,8 @@ const AnalyticsPage = () => {
     </div>
   );
 };
+
+// ─── Activity Log Page ─────────────────────────────────────────────────────────
 
 const ActivityLogPage = ({ orgCode }: { orgCode: string }) => {
   const [entries, setEntries] = useState<ActivityLogEntry[]>([]);
@@ -820,6 +1173,8 @@ const ActivityLogPage = ({ orgCode }: { orgCode: string }) => {
   );
 };
 
+// ─── Reports Page ──────────────────────────────────────────────────────────────
+
 const ReportsPage = () => {
   const [preview, setPreview] = useState<{ title: string; dataUri: string } | null>(null);
   const handlePreview = (title: string) => setPreview({ title, dataUri: buildPDF(title) });
@@ -854,7 +1209,7 @@ const ReportsPage = () => {
   );
 };
 
-// ─── Settings — org code lives here only ──────────────────────────────────────
+// ─── Settings Page ─────────────────────────────────────────────────────────────
 
 const SettingsPage = ({ profile }: { profile: any }) => {
   const [notifOn, setNotifOn] = useState(true);
@@ -862,7 +1217,6 @@ const SettingsPage = ({ profile }: { profile: any }) => {
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
   return (
     <div className="space-y-4">
-      {/* Org Code card — prominently at top of Settings */}
       <Card className="p-5 space-y-3 border border-brand-primary/25 bg-gradient-to-br from-brand-primary/5 to-brand-accent/5">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Your Organisation Code</p>
@@ -960,7 +1314,6 @@ export const OrgAdminDashboard = () => {
   const displayName = profile?.fullName ?? 'Org Admin';
   const initials    = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
   const orgName     = profile?.orgName ?? 'Your Organisation';
-  // Fix TS error: guarantee string for orgCode
   const orgCode     = profile?.orgCode ?? '';
 
   const handleLogout = async () => { await logOut(); navigate('/login'); };
@@ -986,39 +1339,16 @@ export const OrgAdminDashboard = () => {
 
   return (
     <>
-      {/* ── Themed scrollbar styles ── */}
       <style>{`
-        .themed-scroll {
-          scroll-behavior: smooth;
-        }
-        .themed-scroll::-webkit-scrollbar {
-          width: 6px;
-          height: 6px;
-        }
-        .themed-scroll::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .themed-scroll::-webkit-scrollbar-thumb {
-          background: rgba(124, 58, 237, 0.25);
-          border-radius: 99px;
-          transition: background 0.2s;
-        }
-        .themed-scroll::-webkit-scrollbar-thumb:hover {
-          background: rgba(124, 58, 237, 0.5);
-        }
-        .sidebar-scroll::-webkit-scrollbar {
-          width: 4px;
-        }
-        .sidebar-scroll::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .sidebar-scroll::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.15);
-          border-radius: 99px;
-        }
-        .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
+        .themed-scroll { scroll-behavior: smooth; }
+        .themed-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .themed-scroll::-webkit-scrollbar-track { background: transparent; }
+        .themed-scroll::-webkit-scrollbar-thumb { background: rgba(124,58,237,0.25); border-radius: 99px; transition: background 0.2s; }
+        .themed-scroll::-webkit-scrollbar-thumb:hover { background: rgba(124,58,237,0.5); }
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 99px; }
+        .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
       `}</style>
 
       <div className="flex h-screen bg-brand-background overflow-hidden">
@@ -1048,8 +1378,6 @@ export const OrgAdminDashboard = () => {
                 </button>
               ))}
             </nav>
-
-            {/* Org code removed from sidebar — now in Settings only */}
 
             <div className="pt-4 border-t border-white/10 space-y-3">
               <div className="flex items-center gap-3 px-4">

@@ -181,7 +181,7 @@ export const LandingPage = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <div className="w-10 h-10 rounded-full bg-brand-secondary flex items-center justify-center font-bold text-brand-primary">PS</div>
                       <div>
-                        <h4 className="font-heading text-sm">Priya S.</h4>
+                        <h4 className="font-heading text-sm">Vaishnavi N</h4>
                         <p className="text-[10px] text-green-600 font-bold uppercase tracking-widest">Available Now</p>
                       </div>
                     </div>
