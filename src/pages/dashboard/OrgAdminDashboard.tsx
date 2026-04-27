@@ -54,6 +54,79 @@ interface AllocationRow {
   backups: string[];
 }
 
+// ─── AI Allocation Engine (Groq · Llama 3.3 70B) ────────────────────────────────
+
+interface Volunteer {
+  name: string;
+  skill: number;
+  reliability: number;
+  distanceKm: number;
+  available: boolean;
+}
+
+interface GrokAllocationResult {
+  task: string;
+  primaryVolunteer: string;
+  reasoning: string;
+  rankedVolunteers: string[];
+}
+
+async function callGrokForAllocation(
+  tasks: { title: string; impact: number }[],
+  volunteers: Volunteer[],
+): Promise<GrokAllocationResult[]> {
+  const prompt = `
+You are a volunteer allocation engine for an NGO. Assign the best volunteer to each task.
+
+TASKS:
+${tasks.map(t => `- "${t.title}" (impact score: ${t.impact}/100)`).join('\n')}
+
+VOLUNTEERS (name | skill% | reliability% | distance km | available):
+${volunteers.map(v =>
+  `- ${v.name} | skill:${v.skill}% | reliability:${v.reliability}% | distance:${v.distanceKm}km | available:${v.available ? 'yes' : 'no'}`
+).join('\n')}
+
+RULES:
+1. Only assign available volunteers.
+2. Prioritise: (impact score × 0.3) + (skill × 0.3) + (reliability × 0.25) + (distance penalty: max 0.15, closer = higher).
+3. Each volunteer can only be primary for ONE task. They may appear as backups for others.
+4. For each task return ALL volunteers ranked best→worst as backups (excluding the primary).
+
+Respond ONLY with a valid JSON array, no markdown, no explanation:
+[
+  {
+    "task": "<task title>",
+    "primaryVolunteer": "<name>",
+    "reasoning": "<one sentence>",
+    "rankedVolunteers": ["<backup1>", "<backup2>"]
+  }
+]`.trim();
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    console.error('Groq error:', JSON.stringify(errBody, null, 2));
+    throw new Error(`Groq ${res.status}: ${errBody?.error?.message ?? JSON.stringify(errBody)}`);
+  }
+  const data = await res.json();
+  const raw = data.choices[0].message.content.trim();
+  const cleaned = raw.replace(/```json|```/g, '').trim();
+  return JSON.parse(cleaned) as GrokAllocationResult[];
+}
+
 // ─── Dummy data ────────────────────────────────────────────────────────────────
 
 const kpis = [
@@ -75,6 +148,23 @@ const allocationData: AllocationRow[] = [
   { task: 'Food Kit Distribution', volunteer: 'Anjali R.', skill: 94, reliability: 88, distance: 2.1, backups: ['Mohan D.', 'Sneha T.'] },
   { task: 'Community Teaching',    volunteer: 'Ravi M.',   skill: 89, reliability: 92, distance: 3.4, backups: ['Aditi K.'] },
   { task: 'Medical Camp Setup',    volunteer: 'Priya S.',  skill: 97, reliability: 85, distance: 1.8, backups: ['Suresh P.', 'Lakshmi V.'] },
+];
+
+const volunteerPool: Volunteer[] = [
+  { name: 'Anjali R.',  skill: 94, reliability: 88, distanceKm: 2.1, available: true  },
+  { name: 'Ravi M.',    skill: 89, reliability: 92, distanceKm: 3.4, available: true  },
+  { name: 'Priya S.',   skill: 97, reliability: 85, distanceKm: 1.8, available: true  },
+  { name: 'Mohan D.',   skill: 76, reliability: 80, distanceKm: 4.2, available: true  },
+  { name: 'Sneha T.',   skill: 81, reliability: 78, distanceKm: 5.0, available: true  },
+  { name: 'Aditi K.',   skill: 88, reliability: 91, distanceKm: 2.7, available: true  },
+  { name: 'Suresh P.',  skill: 72, reliability: 83, distanceKm: 6.1, available: false },
+  { name: 'Lakshmi V.', skill: 85, reliability: 87, distanceKm: 3.9, available: true  },
+];
+
+const taskPool = [
+  { title: 'Food Kit Distribution', impact: 92 },
+  { title: 'Community Teaching',    impact: 87 },
+  { title: 'Medical Camp Setup',    impact: 78 },
 ];
 
 const staffList = [
@@ -181,7 +271,6 @@ const buildPDF = (title: string): string => {
     const ROW_H = 7;
     let y = startY;
 
-    // Header row
     setColor('#ede9fe', 'fill');
     doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
     doc.setFont('helvetica', 'bold');
@@ -194,7 +283,6 @@ const buildPDF = (title: string): string => {
     });
     y += ROW_H;
 
-    // Data rows
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     rows.forEach((row, ri) => {
@@ -212,7 +300,6 @@ const buildPDF = (title: string): string => {
       y += ROW_H;
     });
 
-    // Outer border
     setColor('#d8b4fe', 'draw');
     doc.setLineWidth(0.4);
     doc.rect(MARGIN, startY, CONTENT_W, y - startY, 'S');
@@ -223,78 +310,34 @@ const buildPDF = (title: string): string => {
   drawHeader();
   drawFooter();
 
-  // ── TASK SUMMARY ─────────────────────────────────────────────────────────────
   if (title === 'Task Summary') {
     let y = 46;
-
     y = sectionHeading('KPI Summary', y);
-    const kpiHeaders = ['Metric', 'Value', 'Note'];
     const kpiRows = kpis.map(k => [k.label, k.value, k.sub]);
-    const kpiWidths = [65, 30, CONTENT_W - 95];
-    y = drawTable(kpiHeaders, kpiRows, kpiWidths, y);
-
+    y = drawTable(['Metric', 'Value', 'Note'], kpiRows, [65, 30, CONTENT_W - 95], y);
     y += 4;
-
     y = sectionHeading('Task Details', y);
-    const taskHeaders = ['ID', 'Title', 'Impact', 'Status', 'Assigned To', 'Created By'];
-    const taskRows = tasks.map(t => [
-      t.id, t.title, String(t.impact), t.status, t.assignedTo, t.createdBy,
-    ]);
-    const taskWidths = [18, 45, 16, 24, 28, CONTENT_W - 131];
-    y = drawTable(taskHeaders, taskRows, taskWidths, y);
-  }
-
-  // ── ASSIGNMENT LIST ──────────────────────────────────────────────────────────
-  else if (title === 'Assignment List') {
+    const taskRows = tasks.map(t => [t.id, t.title, String(t.impact), t.status, t.assignedTo, t.createdBy]);
+    drawTable(['ID', 'Title', 'Impact', 'Status', 'Assigned To', 'Created By'], taskRows, [18, 45, 16, 24, 28, CONTENT_W - 131], y);
+  } else if (title === 'Assignment List') {
     let y = 46;
-
     y = sectionHeading('Volunteer Allocation', y);
-    const allocHeaders = ['Task', 'Volunteer', 'Skill %', 'Reliability %', 'Distance (km)', 'Backups'];
-    const allocRows = allocationData.map(r => [
-      r.task,
-      r.volunteer,
-      String(r.skill),
-      String(r.reliability),
-      String(r.distance),
-      r.backups.join(', ') || '—',
-    ]);
-    const allocWidths = [44, 28, 18, 24, 26, CONTENT_W - 140];
-    y = drawTable(allocHeaders, allocRows, allocWidths, y);
-
+    const allocRows = allocationData.map(r => [r.task, r.volunteer, String(r.skill), String(r.reliability), String(r.distance), r.backups.join(', ') || '—']);
+    y = drawTable(['Task', 'Volunteer', 'Skill %', 'Reliability %', 'Distance (km)', 'Backups'], allocRows, [44, 28, 18, 24, 26, CONTENT_W - 140], y);
     y += 4;
-
     y = sectionHeading('Recent Activity Log', y);
-    const logHeaders = ['Time', 'User', 'Action'];
     const logRows = activityLog.map(e => [e.time, e.user, e.action]);
-    const logWidths = [22, 28, CONTENT_W - 50];
-    y = drawTable(logHeaders, logRows, logWidths, y);
-  }
-
-  // ── ANALYTICS SNAPSHOT ───────────────────────────────────────────────────────
-  else if (title === 'Analytics Snapshot') {
+    drawTable(['Time', 'User', 'Action'], logRows, [22, 28, CONTENT_W - 50], y);
+  } else if (title === 'Analytics Snapshot') {
     let y = 46;
-
     y = sectionHeading('Task Completion Rate — This Week', y);
-    const compHeaders = ['Day', 'Completion Rate (%)'];
-    const compRows = analyticsCompletion.map(d => [d.label, String(d.val)]);
-    const compWidths = [40, CONTENT_W - 40];
-    y = drawTable(compHeaders, compRows, compWidths, y);
-
+    y = drawTable(['Day', 'Completion Rate (%)'], analyticsCompletion.map(d => [d.label, String(d.val)]), [40, CONTENT_W - 40], y);
     y += 4;
-
     y = sectionHeading('Volunteer Activity by Category', y);
-    const volHeaders = ['Category', 'Share (%)'];
-    const volRows = analyticsVolunteer.map(d => [d.label, String(d.val)]);
-    const volWidths = [60, CONTENT_W - 60];
-    y = drawTable(volHeaders, volRows, volWidths, y);
-
+    y = drawTable(['Category', 'Share (%)'], analyticsVolunteer.map(d => [d.label, String(d.val)]), [60, CONTENT_W - 60], y);
     y += 4;
-
     y = sectionHeading('Recent Activity Log', y);
-    const logHeaders = ['Time', 'User', 'Action'];
-    const logRows = activityLog.map(e => [e.time, e.user, e.action]);
-    const logWidths = [22, 28, CONTENT_W - 50];
-    y = drawTable(logHeaders, logRows, logWidths, y);
+    drawTable(['Time', 'User', 'Action'], activityLog.map(e => [e.time, e.user, e.action]), [22, 28, CONTENT_W - 50], y);
   }
 
   return doc.output('datauristring');
@@ -305,7 +348,7 @@ const buildPDF = (title: string): string => {
 const PDFViewer = ({ title, dataUri, onClose }: { title: string; dataUri: string; onClose: () => void }) => {
   const handleDownload = () => {
     const a = document.createElement('a'); a.href = dataUri;
-    a.download = `${title.replace(/\s+/g,'_')}_${Date.now()}.pdf`;
+    a.download = `${title.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
   return (
@@ -364,9 +407,7 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
     try {
       await updateDoc(doc(db, 'users', s.uid), { status: 'approved', resolvedAt: serverTimestamp() });
       setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'approved' }]);
-    } finally {
-      setActing(null);
-    }
+    } finally { setActing(null); }
   };
 
   const reject = async (s: PendingStaff) => {
@@ -374,15 +415,11 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
     try {
       await updateDoc(doc(db, 'users', s.uid), { status: 'rejected', resolvedAt: serverTimestamp() });
       setResolved(prev => [...prev, { uid: s.uid, name: s.fullName, action: 'rejected' }]);
-    } finally {
-      setActing(null);
-    }
+    } finally { setActing(null); }
   };
 
   if (loading) return (
-    <div className="flex items-center justify-center py-20 text-brand-text-secondary text-sm">
-      Loading requests…
-    </div>
+    <div className="flex items-center justify-center py-20 text-brand-text-secondary text-sm">Loading requests…</div>
   );
 
   return (
@@ -412,7 +449,7 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-9 h-9 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 text-[11px] font-bold text-brand-primary">
-                    {s.fullName.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+                    {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
                   <div className="min-w-0">
                     <p className="font-semibold text-sm text-brand-text-primary">{s.fullName}</p>
@@ -424,7 +461,6 @@ const StaffRequestsPage = ({ orgCode }: { orgCode: string }) => {
                   <ChevronDown className={`w-4 h-4 text-brand-text-secondary transition-transform ${expanded === s.uid ? 'rotate-180' : ''}`} />
                 </div>
               </button>
-
               <AnimatePresence>
                 {expanded === s.uid && (
                   <motion.div
@@ -550,7 +586,7 @@ const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
         <motion.div key={member.uid} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
           <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-brand-background border border-black/5 hover:border-brand-primary/20 transition-colors">
             <div className="w-9 h-9 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary shrink-0">
-              {member.fullName.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+              {member.fullName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-semibold text-sm text-brand-text-primary truncate">{member.fullName}</p>
@@ -560,17 +596,12 @@ const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
               <span className={`text-[10px] font-bold uppercase tracking-wide ${member.canCreateTask ? 'text-brand-primary' : 'text-brand-text-secondary'}`}>
                 {member.canCreateTask ? 'Enabled' : 'Disabled'}
               </span>
-              <button
-                onClick={() => togglePermission(member)}
-                disabled={toggling === member.uid}
-                className="relative focus:outline-none"
-              >
+              <button onClick={() => togglePermission(member)} disabled={toggling === member.uid} className="relative focus:outline-none">
                 {toggling === member.uid
                   ? <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
                   : member.canCreateTask
                     ? <ToggleRight className="w-7 h-7 text-brand-primary transition-colors" />
-                    : <ToggleLeft  className="w-7 h-7 text-brand-text-secondary/40 transition-colors" />
-                }
+                    : <ToggleLeft  className="w-7 h-7 text-brand-text-secondary/40 transition-colors" />}
               </button>
             </div>
           </div>
@@ -607,7 +638,7 @@ const DashboardHome = () => (
         <table className="w-full text-left">
           <thead>
             <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Task Name','Impact','Status','Assigned To','Created By',''].map(h => (
+              {['Task Name', 'Impact', 'Status', 'Assigned To', 'Created By', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -634,7 +665,6 @@ const DashboardHome = () => (
 
 const TasksPage = ({ orgCode }: { orgCode: string }) => {
   const [showPermissions, setShowPermissions] = useState(false);
-
   return (
     <div className="space-y-6">
       <div className="space-y-4">
@@ -656,7 +686,7 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-brand-background/50 border-b border-black/5">
-                  {['Task','Impact','Status','Assigned Volunteer','Created By','Actions'].map(h => (
+                  {['Task', 'Impact', 'Status', 'Assigned Volunteer', 'Created By', 'Actions'].map(h => (
                     <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -677,7 +707,6 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
           </div>
         </Card>
       </div>
-
       <AnimatePresence>
         {showPermissions && (
           <motion.div
@@ -689,9 +718,7 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-heading font-bold text-brand-text-primary">Task Creation Permissions</h3>
-                  <p className="text-[11px] text-brand-text-secondary mt-0.5">
-                    Toggle which staff members can create new tasks in your organisation.
-                  </p>
+                  <p className="text-[11px] text-brand-text-secondary mt-0.5">Toggle which staff members can create new tasks in your organisation.</p>
                 </div>
                 <button onClick={() => setShowPermissions(false)}
                   className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 transition-colors text-brand-text-secondary">
@@ -726,21 +753,17 @@ const ReassignPanel = ({
 
   return (
     <motion.div
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: 'auto' }}
-      exit={{ opacity: 0, height: 0 }}
-      transition={{ duration: 0.2 }}
+      initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+      exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}
       className="overflow-hidden"
     >
       <div className="px-5 pb-5 pt-4 border-t border-black/5 bg-brand-background/40 space-y-3">
         <p className="text-[11px] font-bold uppercase tracking-widest text-brand-text-secondary">
           Reassign · {row.task}
         </p>
-
         {useCustom ? (
           <input
-            value={custom}
-            onChange={e => setCustom(e.target.value)}
+            value={custom} onChange={e => setCustom(e.target.value)}
             placeholder="Enter volunteer name…"
             className="w-full px-3 py-2 rounded-lg border border-black/10 focus:border-brand-primary outline-none text-sm bg-white"
           />
@@ -748,36 +771,20 @@ const ReassignPanel = ({
           <div className="space-y-1.5">
             {options.map(opt => (
               <label key={opt} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-black/8 bg-white hover:border-brand-primary/30 cursor-pointer transition-colors">
-                <input
-                  type="radio"
-                  name={`reassign-${row.task}`}
-                  value={opt}
-                  checked={selected === opt}
-                  onChange={() => setSelected(opt)}
-                  className="accent-brand-primary"
-                />
+                <input type="radio" name={`reassign-${row.task}`} value={opt}
+                  checked={selected === opt} onChange={() => setSelected(opt)} className="accent-brand-primary" />
                 <span className="text-sm font-medium text-brand-text-primary">{opt}</span>
                 <span className="ml-auto text-[10px] text-brand-text-secondary">Backup volunteer</span>
               </label>
             ))}
           </div>
         )}
-
         <div className="flex gap-3 pt-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onCancel}
-            className="flex-1 text-[10px] uppercase font-bold tracking-widest"
-          >
+          <Button variant="ghost" size="sm" onClick={onCancel} className="flex-1 text-[10px] uppercase font-bold tracking-widest">
             Cancel
           </Button>
-          <Button
-            size="sm"
-            onClick={() => { if (finalValue) onConfirm(finalValue); }}
-            disabled={!finalValue}
-            className="flex-1 gap-1.5 text-[10px] uppercase font-bold tracking-widest"
-          >
+          <Button size="sm" onClick={() => { if (finalValue) onConfirm(finalValue); }} disabled={!finalValue}
+            className="flex-1 gap-1.5 text-[10px] uppercase font-bold tracking-widest">
             <CheckCircle2 className="w-3 h-3" /> Confirm Reassign
           </Button>
         </div>
@@ -789,16 +796,65 @@ const ReassignPanel = ({
 // ─── Allocation Page ───────────────────────────────────────────────────────────
 
 const AllocationPage = () => {
-  const [rows, setRows] = useState<AllocationRow[]>(allocationData);
+  const [rows, setRows]               = useState<AllocationRow[]>(allocationData);
   const [reassigning, setReassigning] = useState<string | null>(null);
-  const [toasts, setToasts] = useState<{ task: string; from: string; to: string }[]>([]);
+  const [toasts, setToasts]           = useState<{ task: string; from: string; to: string }[]>([]);
+  const [running, setRunning]         = useState(false);
+  const [grokError, setGrokError]     = useState<string | null>(null);
+  const [reasoningMap, setReasoningMap] = useState<Record<string, string>>({});
+  const [suggestingFor, setSuggestingFor] = useState<string | null>(null);
+
+  // ── Bulk re-allocation via Grok ─────────────────────────────────────────────
+  const runAutoAssign = async () => {
+    setRunning(true);
+    setGrokError(null);
+    try {
+      const results = await callGrokForAllocation(taskPool, volunteerPool);
+      const newRows: AllocationRow[] = results.map(r => {
+        const vol = volunteerPool.find(v => v.name === r.primaryVolunteer);
+        return {
+          task:        r.task,
+          volunteer:   r.primaryVolunteer,
+          skill:       vol?.skill       ?? 0,
+          reliability: vol?.reliability ?? 0,
+          distance:    vol?.distanceKm  ?? 0,
+          backups:     r.rankedVolunteers.slice(0, 3),
+        };
+      });
+      setRows(newRows);
+      const rm: Record<string, string> = {};
+      results.forEach(r => { rm[r.task] = r.reasoning; });
+      setReasoningMap(rm);
+    } catch (e: any) {
+      setGrokError(`Grok error: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // ── AI-suggest backups for a single task ────────────────────────────────────
+  const suggestBackups = async (row: AllocationRow) => {
+    setSuggestingFor(row.task);
+    setGrokError(null);
+    try {
+      const results = await callGrokForAllocation(
+        [{ title: row.task, impact: taskPool.find(t => t.title === row.task)?.impact ?? 80 }],
+        volunteerPool.filter(v => v.name !== row.volunteer),
+      );
+      const ranked = results[0]?.rankedVolunteers ?? [];
+      setRows(prev => prev.map(r => r.task === row.task ? { ...r, backups: ranked.slice(0, 3) } : r));
+    } catch (e: any) {
+      setGrokError(`Grok error: ${e.message}`);
+    } finally {
+      setSuggestingFor(null);
+    }
+  };
 
   const handleConfirm = (task: string, newVolunteer: string) => {
     const old = rows.find(r => r.task === task)?.volunteer ?? '';
     setRows(prev => prev.map(r => {
       if (r.task !== task) return r;
-      const newBackups = [r.volunteer, ...r.backups.filter(b => b !== newVolunteer)];
-      return { ...r, volunteer: newVolunteer, backups: newBackups };
+      return { ...r, volunteer: newVolunteer, backups: [r.volunteer, ...r.backups.filter(b => b !== newVolunteer)] };
     }));
     setToasts(prev => [...prev, { task, from: old, to: newVolunteer }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.task !== task)), 3500);
@@ -809,20 +865,25 @@ const AllocationPage = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-heading font-bold">Allocation View</h2>
-        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
-          <Sparkles className="w-3 h-3" /> Re-run Auto Assign
+        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"
+          onClick={runAutoAssign} disabled={running}>
+          {running
+            ? <><Loader2 className="w-3 h-3 animate-spin" /> Grok thinking…</>
+            : <><Sparkles className="w-3 h-3" /> Re-run Auto Assign</>}
         </Button>
       </div>
 
+      {grokError && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {grokError}
+        </div>
+      )}
+
       <AnimatePresence>
         {toasts.map(t => (
-          <motion.div
-            key={t.task}
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700"
-          >
+          <motion.div key={t.task}
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700">
             <CheckCircle2 className="w-4 h-4 shrink-0 text-green-500" />
             <span>
               <span className="font-semibold">{t.task}</span> reassigned from{' '}
@@ -843,6 +904,12 @@ const AllocationPage = () => {
                   <p className="text-xs text-brand-text-secondary">
                     Assigned → <span className="font-semibold text-brand-primary">{row.volunteer}</span>
                   </p>
+                  {reasoningMap[row.task] && (
+                    <p className="text-[10px] text-brand-text-secondary mt-1 italic flex items-center gap-1">
+                      <Sparkles className="w-2.5 h-2.5 text-brand-primary" />
+                      {reasoningMap[row.task]}
+                    </p>
+                  )}
                 </div>
                 <div className="flex gap-4 flex-wrap">
                   {[
@@ -857,24 +924,30 @@ const AllocationPage = () => {
                   ))}
                 </div>
                 <div className="flex flex-col gap-1 min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Backups</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Backups</p>
+                    <button
+                      onClick={() => suggestBackups(row)}
+                      disabled={suggestingFor === row.task}
+                      className="text-[9px] font-bold uppercase tracking-widest text-brand-primary hover:opacity-70 transition-opacity disabled:opacity-40 flex items-center gap-1"
+                    >
+                      {suggestingFor === row.task
+                        ? <><Loader2 className="w-2.5 h-2.5 animate-spin" /> asking grok…</>
+                        : <><Sparkles className="w-2.5 h-2.5" /> ai suggest</>}
+                    </button>
+                  </div>
                   {row.backups.length > 0
                     ? row.backups.map(b => <span key={b} className="text-xs text-brand-text-secondary">{b}</span>)
-                    : <span className="text-xs text-brand-text-secondary italic">None</span>
-                  }
+                    : <span className="text-xs text-brand-text-secondary italic">None</span>}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <Button variant="ghost" size="sm"
                   className={`text-[10px] h-7 px-3 shrink-0 transition-colors ${
                     reassigning === row.task ? 'text-brand-primary bg-brand-primary/5 border border-brand-primary/20' : ''
                   }`}
-                  onClick={() => setReassigning(prev => prev === row.task ? null : row.task)}
-                >
+                  onClick={() => setReassigning(prev => prev === row.task ? null : row.task)}>
                   {reassigning === row.task ? 'Cancel' : 'Reassign'}
                 </Button>
               </div>
-
               <AnimatePresence>
                 {reassigning === row.task && (
                   <ReassignPanel
@@ -925,10 +998,8 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
     if (toggling) return;
     setToggling(m.uid);
     setToggleError(null);
-
     const next = !m.canCreateTask;
     setMembers(prev => prev.map(x => x.uid === m.uid ? { ...x, canCreateTask: next } : x));
-
     try {
       await updateDoc(doc(db, 'users', m.uid), { canCreateTask: next });
     } catch (err: any) {
@@ -937,7 +1008,6 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
       setToggling(null);
       return;
     }
-
     try {
       await addDoc(collection(db, 'activityLogs'), {
         orgCode,
@@ -966,13 +1036,11 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
         <h2 className="text-base font-heading font-bold">Staff Management</h2>
         <span className="text-xs text-brand-text-secondary">{members.length} member{members.length !== 1 ? 's' : ''}</span>
       </div>
-
       {toggleError && (
         <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {toggleError}
         </div>
       )}
-
       {members.length === 0 ? (
         <Card className="p-10 flex flex-col items-center gap-3 text-center">
           <Users className="w-10 h-10 text-brand-text-secondary/40" />
@@ -985,24 +1053,19 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-brand-background/50 border-b border-black/5">
-                  {['Name','Email','Tasks Created','Can Create Tasks',''].map(h => (
+                  {['Name', 'Email', 'Tasks Created', 'Can Create Tasks', ''].map(h => (
                     <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/5 text-brand-text-primary">
                 {members.map((m, i) => (
-                  <motion.tr
-                    key={m.uid}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                    className="hover:bg-brand-background/30 transition-colors"
-                  >
+                  <motion.tr key={m.uid} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                    className="hover:bg-brand-background/30 transition-colors">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center text-[11px] font-bold text-brand-primary shrink-0">
-                          {m.fullName.split(' ').map((w: string) => w[0]).join('').slice(0,2).toUpperCase()}
+                          {m.fullName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()}
                         </div>
                         <span className="font-semibold text-sm">{m.fullName}</span>
                       </div>
@@ -1010,12 +1073,9 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
                     <td className="px-4 py-3 text-sm text-brand-text-secondary">{m.email}</td>
                     <td className="px-4 py-3 text-sm font-semibold">{m.tasksCreated ?? 0}</td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => togglePerm(m)}
-                        disabled={toggling === m.uid}
+                      <button onClick={() => togglePerm(m)} disabled={toggling === m.uid}
                         className="flex items-center gap-2 text-xs font-medium transition-colors disabled:opacity-60"
-                        aria-label={m.canCreateTask ? 'Disable task creation' : 'Enable task creation'}
-                      >
+                        aria-label={m.canCreateTask ? 'Disable task creation' : 'Enable task creation'}>
                         {toggling === m.uid ? (
                           <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
                         ) : m.canCreateTask ? (
@@ -1025,9 +1085,7 @@ const StaffManagementPage = ({ orgCode }: { orgCode: string }) => {
                         )}
                       </button>
                     </td>
-                    <td className="px-4 py-3">
-                      <Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">View</Button>
-                    </td>
+                    <td className="px-4 py-3"><Button variant="ghost" size="sm" className="text-[10px] h-7 px-3">View</Button></td>
                   </motion.tr>
                 ))}
               </tbody>
@@ -1047,10 +1105,11 @@ const AnalyticsPage = () => {
   let cumAngle = 0;
   const slices = analyticsVolunteer.map((d, i) => {
     const angle = (d.val / total) * 360; const start = cumAngle; cumAngle += angle;
-    const r=60; const cx=80; const cy=80; const toRad=(deg:number)=>(deg*Math.PI)/180;
-    const x1=cx+r*Math.cos(toRad(start-90)); const y1=cy+r*Math.sin(toRad(start-90));
-    const x2=cx+r*Math.cos(toRad(start+angle-90)); const y2=cy+r*Math.sin(toRad(start+angle-90));
-    return { d:`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${angle>180?1:0} 1 ${x2} ${y2} Z`, color:pieColors[i], label:d.label, val:d.val };
+    const r = 60; const cx = 80; const cy = 80;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(toRad(start - 90)); const y1 = cy + r * Math.sin(toRad(start - 90));
+    const x2 = cx + r * Math.cos(toRad(start + angle - 90)); const y2 = cy + r * Math.sin(toRad(start + angle - 90));
+    return { d: `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${angle > 180 ? 1 : 0} 1 ${x2} ${y2} Z`, color: pieColors[i], label: d.label, val: d.val };
   });
   return (
     <div className="space-y-6">
@@ -1063,7 +1122,7 @@ const AnalyticsPage = () => {
               <div key={i} className="flex-1 flex flex-col items-center gap-1">
                 <span className="text-[10px] font-bold text-brand-primary">{d.val}%</span>
                 <motion.div className="w-full bg-brand-primary/80 rounded-t-md" style={{ height: 0 }}
-                  animate={{ height: `${(d.val/maxBar)*100}%` }} transition={{ delay: i*0.05, duration: 0.5, ease: 'easeOut' }} />
+                  animate={{ height: `${(d.val / maxBar) * 100}%` }} transition={{ delay: i * 0.05, duration: 0.5, ease: 'easeOut' }} />
                 <span className="text-[10px] text-brand-text-secondary">{d.label}</span>
               </div>
             ))}
@@ -1142,7 +1201,6 @@ const ActivityLogPage = ({ orgCode }: { orgCode: string }) => {
         <h2 className="text-base font-heading font-bold">Activity Log</h2>
         <span className="text-xs text-brand-text-secondary">{entries.length} entries</span>
       </div>
-
       {entries.length === 0 ? (
         <Card className="p-10 flex flex-col items-center gap-3 text-center">
           <ScrollText className="w-10 h-10 text-brand-text-secondary/40" />
@@ -1156,7 +1214,7 @@ const ActivityLogPage = ({ orgCode }: { orgCode: string }) => {
               className="flex items-start gap-4 px-5 py-4">
               <div className="w-8 h-8 rounded-full bg-brand-primary/10 flex items-center justify-center shrink-0 mt-0.5">
                 <span className="text-[10px] font-bold text-brand-primary">
-                  {e.user.split(' ').map((w: string) => w[0]).join('').slice(0,2).toUpperCase()}
+                  {e.user.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
@@ -1227,10 +1285,8 @@ const SettingsPage = ({ profile }: { profile: any }) => {
             <div className="flex-1 bg-white rounded-xl px-4 py-3 border border-brand-primary/20 flex items-center gap-3">
               <span className="font-mono text-2xl font-bold text-brand-primary tracking-[0.2em]">{profile.orgCode}</span>
             </div>
-            <button
-              onClick={() => navigator.clipboard.writeText(profile.orgCode)}
-              className="px-4 py-3 rounded-xl bg-brand-primary text-white text-xs font-bold hover:opacity-90 transition-opacity shrink-0"
-            >
+            <button onClick={() => navigator.clipboard.writeText(profile.orgCode)}
+              className="px-4 py-3 rounded-xl bg-brand-primary text-white text-xs font-bold hover:opacity-90 transition-opacity shrink-0">
               Copy Code
             </button>
           </div>
@@ -1238,7 +1294,6 @@ const SettingsPage = ({ profile }: { profile: any }) => {
           <span className="text-sm text-amber-600 font-semibold">Pending approval — code will appear here once approved.</span>
         )}
       </Card>
-
       <Card className="p-5 space-y-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Organisation Profile</p>
         {[
@@ -1297,7 +1352,6 @@ export const OrgAdminDashboard = () => {
   const [active, setActive] = useState<NavKey>('dashboard');
   const { profile } = useAuth();
   const navigate = useNavigate();
-
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
@@ -1357,12 +1411,10 @@ export const OrgAdminDashboard = () => {
         <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
           <div className="p-6 flex flex-col h-full">
             <div className="mb-8"><Logo /></div>
-
             <div className="mb-6 px-4 py-3 bg-white/10 rounded-[8px]">
               <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Org Admin</p>
               <p className="text-sm font-semibold text-white mt-0.5 truncate">{orgName}</p>
             </div>
-
             <nav className="flex-1 space-y-1 overflow-y-auto sidebar-scroll">
               {NAV.map(item => (
                 <button key={item.key} onClick={() => setActive(item.key)}
@@ -1378,7 +1430,6 @@ export const OrgAdminDashboard = () => {
                 </button>
               ))}
             </nav>
-
             <div className="pt-4 border-t border-white/10 space-y-3">
               <div className="flex items-center gap-3 px-4">
                 <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">{initials}</div>
@@ -1419,10 +1470,8 @@ export const OrgAdminDashboard = () => {
               <h1 className="text-lg font-heading font-bold text-brand-text-primary">{navLabel[active]}</h1>
             </div>
             {active !== 'requests' && pendingCount > 0 && (
-              <button
-                onClick={() => setActive('requests')}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-full text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors"
-              >
+              <button onClick={() => setActive('requests')}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-full text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors">
                 <Bell className="w-3.5 h-3.5" />
                 {pendingCount} staff request{pendingCount > 1 ? 's' : ''} pending
               </button>
