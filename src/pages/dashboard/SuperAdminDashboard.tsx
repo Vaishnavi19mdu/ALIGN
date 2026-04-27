@@ -4,11 +4,12 @@ import {
   LayoutDashboard, ClipboardCheck, Building2, Users, BarChart2,
   Megaphone, Settings, LogOut, CheckCircle2, XCircle, Globe,
   TrendingUp, Shield, Plus, X, ChevronDown, ToggleLeft, ToggleRight,
-  AlertCircle,
+  AlertCircle, Loader2,
 } from 'lucide-react';
 import {
   collection, query, where, onSnapshot,
-  doc, updateDoc, serverTimestamp,
+  doc, updateDoc, serverTimestamp, addDoc, orderBy, limit,
+  getDocs,
 } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { Card } from '../../components/common/Card';
@@ -32,66 +33,54 @@ interface PendingOrg {
   createdAt: any;
 }
 
-// ─── Dummy data (non-approval sections) ───────────────────────────────────────
+interface OrgDoc {
+  id: string;         // doc id = orgCode e.g. "GRN-2002"
+  orgCode: string;
+  orgName: string;
+  orgType: string;
+  orgSize: string;
+  adminEmail: string;
+  adminUid: string;
+  createdAt: any;
+  // computed
+  volunteerCount?: number;
+  staffCount?: number;
+  taskCount?: number;
+  status?: string;
+}
 
-const platformStats = [
-  { label: 'Total Orgs',       value: '34',     sub: '+3 this month',  color: 'text-brand-primary', bg: 'bg-brand-primary/10', icon: Building2 },
-  { label: 'Total Volunteers', value: '2,841',  sub: '+128 this week', color: 'text-blue-600',      bg: 'bg-blue-50',          icon: Users },
-  { label: 'Tasks Completed',  value: '12,490', sub: '94% on time',    color: 'text-green-600',     bg: 'bg-green-50',         icon: ClipboardCheck },
-  { label: 'Completion Rate',  value: '91%',    sub: 'platform avg',   color: 'text-brand-accent',  bg: 'bg-brand-accent/10',  icon: TrendingUp },
-];
+interface UserDoc {
+  uid: string;
+  fullName: string;
+  email: string;
+  role: string;
+  orgName?: string;
+  orgCodeUsed?: string;
+  orgCode?: string;
+  status: string;
+  canCreateTask?: boolean;
+}
 
-const allOrgs = [
-  { id: 'ORG-001', name: 'Impact Global NGO',        type: 'NGO',          status: 'Active',   volunteers: 124, tasks: 38,  code: 'IMG-1234' },
-  { id: 'ORG-002', name: 'Relief India Trust',        type: 'NGO',          status: 'Active',   volunteers: 89,  tasks: 27,  code: 'RIT-5678' },
-  { id: 'ORG-003', name: 'EduReach Foundation',       type: 'NGO',          status: 'Active',   volunteers: 210, tasks: 61,  code: 'EDU-9012' },
-  { id: 'ORG-004', name: 'TechForGood Corp',          type: 'Corporate CSR', status: 'Active',  volunteers: 55,  tasks: 14,  code: 'TFG-3456' },
-  { id: 'ORG-005', name: 'Village Connect',           type: 'Community',    status: 'Inactive', volunteers: 32,  tasks: 8,   code: 'VLC-7890' },
-  { id: 'ORG-006', name: 'Govt Health Initiative',    type: 'Govt',         status: 'Active',   volunteers: 178, tasks: 45,  code: 'GHI-2345' },
-];
+interface TaskDoc {
+  id: string;
+  title: string;
+  orgCode: string;
+  status: string;
+  priority: string;
+  assignedTo: string;
+  createdBy: string;
+  category: string;
+  deadline: string;
+}
 
-const allUsers = [
-  { name: 'Anjali R.',     email: 'anjali@impact.org',    role: 'volunteer',  org: 'Impact Global NGO',     status: 'Active' },
-  { name: 'Ravi M.',       email: 'ravi@relief.in',       role: 'volunteer',  org: 'Relief India Trust',    status: 'Active' },
-  { name: 'Meena Nair',    email: 'meena@impact.org',     role: 'org_staff',  org: 'Impact Global NGO',     status: 'Active' },
-  { name: 'Karthik Rajan', email: 'karthik@edureac.org',  role: 'org_staff',  org: 'EduReach Foundation',   status: 'Active' },
-  { name: 'Sarah Ramesh',  email: 'sarah@impact.org',     role: 'org_admin',  org: 'Impact Global NGO',     status: 'Active' },
-  { name: 'Divya Pillai',  email: 'divya@villagec.org',   role: 'org_admin',  org: 'Village Connect',       status: 'Inactive' },
-  { name: 'Arjun Das',     email: 'arjun@techforgood.in', role: 'volunteer',  org: 'TechForGood Corp',      status: 'Active' },
-  { name: 'Priya S.',      email: 'priya@govhealth.gov',  role: 'org_staff',  org: 'Govt Health Initiative', status: 'Active' },
-];
-
-const announcements = [
-  { id: 1, title: 'Platform maintenance scheduled', body: 'System will be down for 2 hours on May 3rd at midnight IST.', audience: 'All', sentAt: 'Apr 24, 2026', pinned: true },
-  { id: 2, title: 'New task auto-assign engine live', body: 'Upgraded matching algorithm now considers proximity within 5km radius.', audience: 'Org Admins', sentAt: 'Apr 20, 2026', pinned: false },
-  { id: 3, title: 'Volunteer milestone: 10,000 tasks!', body: 'Celebrating a platform-wide milestone. Thank you to all orgs and volunteers.', audience: 'All', sentAt: 'Apr 15, 2026', pinned: false },
-];
-
-const orgPerformance = [
-  { name: 'EduReach Foundation',    score: 96, tasks: 61, volunteers: 210, completionRate: 98 },
-  { name: 'Impact Global NGO',       score: 91, tasks: 38, volunteers: 124, completionRate: 94 },
-  { name: 'Govt Health Initiative',  score: 88, tasks: 45, volunteers: 178, completionRate: 91 },
-  { name: 'Relief India Trust',      score: 84, tasks: 27, volunteers: 89,  completionRate: 87 },
-  { name: 'TechForGood Corp',        score: 79, tasks: 14, volunteers: 55,  completionRate: 82 },
-  { name: 'Village Connect',         score: 61, tasks: 8,  volunteers: 32,  completionRate: 74 },
-];
-
-const geoData = [
-  { region: 'Tamil Nadu',      orgs: 12, volunteers: 980 },
-  { region: 'Karnataka',       orgs: 8,  volunteers: 640 },
-  { region: 'Maharashtra',     orgs: 7,  volunteers: 710 },
-  { region: 'Delhi NCR',       orgs: 5,  volunteers: 390 },
-  { region: 'West Bengal',     orgs: 2,  volunteers: 121 },
-];
-
-const systemSettings = [
-  { key: 'auto_approve_volunteers', label: 'Auto-approve volunteer signups', description: 'New volunteers are active immediately without admin review', enabled: true },
-  { key: 'org_code_expiry',         label: 'Org invite codes expire after 30 days', description: 'Codes generated on approval expire after 30 days', enabled: false },
-  { key: 'ai_matching',             label: 'AI-powered task matching', description: 'Use the auto-assign engine for new tasks', enabled: true },
-  { key: 'email_notifications',     label: 'Email notifications', description: 'Send email alerts for approvals, task assignments and updates', enabled: true },
-  { key: 'require_doc_upload',      label: 'Require bonafide doc on org signup', description: 'Orgs must upload incorporation certificate to register', enabled: true },
-  { key: 'maintenance_mode',        label: 'Maintenance mode', description: 'Take the platform offline for all non-superadmin users', enabled: false },
-];
+interface AnnouncementDoc {
+  id: string;
+  title: string;
+  body: string;
+  audience: string;
+  sentAt: any;
+  pinned: boolean;
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -107,28 +96,74 @@ const roleStyle = (role: string) => {
   return 'bg-black/5 text-brand-text-secondary';
 };
 
-const statusDot = (s: string) => s === 'Active'
-  ? 'bg-green-500'
-  : 'bg-brand-text-secondary/30';
+const statusDot = (s: string) =>
+  s === 'Active' || s === 'approved' ? 'bg-green-500' : 'bg-brand-text-secondary/30';
+
+const fmtTime = (ts: any): string => {
+  if (!ts?.toDate) return '—';
+  return ts.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const systemSettings = [
+  { key: 'auto_approve_volunteers', label: 'Auto-approve volunteer signups',         description: 'New volunteers are active immediately without admin review',      enabled: true  },
+  { key: 'org_code_expiry',         label: 'Org invite codes expire after 30 days',  description: 'Codes generated on approval expire after 30 days',               enabled: false },
+  { key: 'ai_matching',             label: 'AI-powered task matching',               description: 'Use the auto-assign engine for new tasks',                       enabled: true  },
+  { key: 'email_notifications',     label: 'Email notifications',                    description: 'Send email alerts for approvals, task assignments and updates',   enabled: true  },
+  { key: 'require_doc_upload',      label: 'Require bonafide doc on org signup',     description: 'Orgs must upload incorporation certificate to register',          enabled: true  },
+  { key: 'maintenance_mode',        label: 'Maintenance mode',                       description: 'Take the platform offline for all non-superadmin users',         enabled: false },
+];
 
 // ─── DashboardHome ────────────────────────────────────────────────────────────
 
 const DashboardHome = () => {
   const [pendingPreview, setPendingPreview] = useState<PendingOrg[]>([]);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [pendingCount,   setPendingCount]   = useState(0);
+  const [orgCount,       setOrgCount]       = useState(0);
+  const [volunteerCount, setVolunteerCount] = useState(0);
+  const [taskCount,      setTaskCount]      = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
+  const [orgs,           setOrgs]           = useState<OrgDoc[]>([]);
 
   useEffect(() => {
-    const q = query(
+    // Pending org_admin applications
+    const qPending = query(
       collection(db, 'users'),
       where('role', '==', 'org_admin'),
       where('status', '==', 'pending'),
     );
-    return onSnapshot(q, snap => {
+    const unsubPending = onSnapshot(qPending, snap => {
       const docs = snap.docs.map(d => ({ uid: d.id, ...d.data() } as PendingOrg));
       setPendingCount(docs.length);
       setPendingPreview(docs.slice(0, 3));
     });
+
+    // Orgs collection
+    const unsubOrgs = onSnapshot(collection(db, 'organisations'), snap => {
+      setOrgCount(snap.size);
+      setOrgs(snap.docs.map(d => ({ id: d.id, ...d.data() } as OrgDoc)));
+    });
+
+    // Volunteers
+    const qVols = query(collection(db, 'users'), where('role', '==', 'volunteer'));
+    const unsubVols = onSnapshot(qVols, snap => setVolunteerCount(snap.size));
+
+    // Tasks
+    const unsubTasks = onSnapshot(collection(db, 'tasks'), snap => {
+      setTaskCount(snap.size);
+      setCompletedCount(snap.docs.filter(d => d.data().status === 'Completed').length);
+    });
+
+    return () => { unsubPending(); unsubOrgs(); unsubVols(); unsubTasks(); };
   }, []);
+
+  const completionRate = taskCount > 0 ? Math.round((completedCount / taskCount) * 100) : 0;
+
+  const platformStats = [
+    { label: 'Total Orgs',       value: String(orgCount),       sub: 'registered',         color: 'text-brand-primary', bg: 'bg-brand-primary/10', icon: Building2     },
+    { label: 'Total Volunteers', value: String(volunteerCount), sub: 'active on platform',  color: 'text-blue-600',      bg: 'bg-blue-50',          icon: Users         },
+    { label: 'Tasks',            value: String(taskCount),      sub: `${completedCount} completed`, color: 'text-green-600', bg: 'bg-green-50',    icon: ClipboardCheck },
+    { label: 'Completion Rate',  value: `${completionRate}%`,   sub: 'platform avg',        color: 'text-brand-accent',  bg: 'bg-brand-accent/10',  icon: TrendingUp    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -195,22 +230,18 @@ const DashboardHome = () => {
         </Card>
       </div>
 
-      {/* Org performance preview */}
+      {/* Org overview */}
       <div>
-        <h2 className="text-base font-heading font-bold mb-3">Org Performance Overview</h2>
+        <h2 className="text-base font-heading font-bold mb-3">Registered Organisations</h2>
         <Card className="p-5 space-y-3">
-          {orgPerformance.slice(0, 4).map((org, i) => (
-            <div key={i} className="flex items-center gap-4">
-              <span className="text-sm w-44 shrink-0 font-medium text-brand-text-primary truncate">{org.name}</span>
-              <div className="flex-1 h-2 bg-black/5 rounded-full overflow-hidden">
-                <motion.div
-                  className="h-full bg-brand-primary rounded-full"
-                  style={{ width: 0 }}
-                  animate={{ width: `${org.score}%` }}
-                  transition={{ duration: 0.7, delay: i * 0.08, ease: 'easeOut' }}
-                />
-              </div>
-              <span className="text-xs font-bold text-brand-primary w-10 text-right">{org.score}</span>
+          {orgs.length === 0 && (
+            <p className="text-sm text-brand-text-secondary text-center py-4">No organisations yet.</p>
+          )}
+          {orgs.slice(0, 5).map((org, i) => (
+            <div key={org.id} className="flex items-center gap-4">
+              <span className="text-sm w-44 shrink-0 font-medium text-brand-text-primary truncate">{org.orgName}</span>
+              <span className="text-[11px] text-brand-text-secondary shrink-0">{org.orgType}</span>
+              <span className="ml-auto font-mono text-xs font-bold text-brand-primary">{org.orgCode}</span>
             </div>
           ))}
         </Card>
@@ -222,11 +253,11 @@ const DashboardHome = () => {
 // ─── ApprovalsPage ────────────────────────────────────────────────────────────
 
 const ApprovalsPage = () => {
-  const [pending, setPending]   = useState<PendingOrg[]>([]);
-  const [resolved, setResolved] = useState<{ uid: string; orgName: string; status: 'approved' | 'rejected'; code?: string }[]>([]);
-  const [loading, setLoading]   = useState(true);
+  const [pending,    setPending]    = useState<PendingOrg[]>([]);
+  const [resolved,   setResolved]   = useState<{ uid: string; orgName: string; status: 'approved' | 'rejected'; code?: string }[]>([]);
+  const [loading,    setLoading]    = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [acting, setActing]     = useState<string | null>(null);
+  const [acting,     setActing]     = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(
@@ -243,10 +274,19 @@ const ApprovalsPage = () => {
   const approve = async (org: PendingOrg) => {
     setActing(org.uid);
     const code = generateOrgCode(org.orgName);
+    // Update user doc
     await updateDoc(doc(db, 'users', org.uid), {
-      status: 'approved',
-      orgCode: code,
-      resolvedAt: serverTimestamp(),
+      status: 'approved', orgCode: code, resolvedAt: serverTimestamp(),
+    });
+    // Create org doc in 'organisations' collection
+    await addDoc(collection(db, 'organisations'), {
+      orgCode:    code,
+      orgName:    org.orgName,
+      orgType:    org.orgType,
+      orgSize:    org.orgSize,
+      adminEmail: org.email,
+      adminUid:   org.uid,
+      createdAt:  serverTimestamp(),
     });
     setResolved(prev => [...prev, { uid: org.uid, orgName: org.orgName, status: 'approved', code }]);
     setActing(null);
@@ -254,21 +294,16 @@ const ApprovalsPage = () => {
 
   const reject = async (org: PendingOrg) => {
     setActing(org.uid);
-    await updateDoc(doc(db, 'users', org.uid), {
-      status: 'rejected',
-      resolvedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'users', org.uid), { status: 'rejected', resolvedAt: serverTimestamp() });
     setResolved(prev => [...prev, { uid: org.uid, orgName: org.orgName, status: 'rejected' }]);
     setActing(null);
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 text-brand-text-secondary text-sm">
-        Loading approvals…
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="flex items-center justify-center gap-2 py-20 text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading approvals…
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -313,10 +348,8 @@ const ApprovalsPage = () => {
               <AnimatePresence>
                 {expandedId === org.uid && (
                   <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
+                    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
                     className="overflow-hidden"
                   >
                     <div className="px-5 pb-5 border-t border-black/5 pt-4 space-y-4">
@@ -328,6 +361,7 @@ const ApprovalsPage = () => {
                           { label: 'Org Size',    val: org.orgSize },
                           { label: 'Reg. Number', val: org.regNum },
                           { label: 'Website',     val: org.orgWebsite || '—' },
+                          { label: 'Applied',     val: fmtTime(org.createdAt) },
                         ].map(f => (
                           <div key={f.label} className="bg-brand-background rounded-lg px-3 py-2">
                             <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">{f.label}</p>
@@ -336,21 +370,13 @@ const ApprovalsPage = () => {
                         ))}
                       </div>
                       <div className="flex gap-3 pt-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                        <Button variant="ghost" size="sm"
                           className="flex-1 gap-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 border border-red-100"
-                          onClick={() => reject(org)}
-                          disabled={acting === org.uid}
-                        >
+                          onClick={() => reject(org)} disabled={acting === org.uid}>
                           <XCircle className="w-3.5 h-3.5" /> Reject
                         </Button>
-                        <Button
-                          size="sm"
-                          className="flex-1 gap-1.5"
-                          onClick={() => approve(org)}
-                          disabled={acting === org.uid}
-                        >
+                        <Button size="sm" className="flex-1 gap-1.5"
+                          onClick={() => approve(org)} disabled={acting === org.uid}>
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           {acting === org.uid ? 'Saving…' : 'Approve & Generate Code'}
                         </Button>
@@ -398,193 +424,302 @@ const ApprovalsPage = () => {
 
 // ─── OrgsPage ─────────────────────────────────────────────────────────────────
 
-const OrgsPage = () => (
-  <div className="space-y-4">
-    <h2 className="text-base font-heading font-bold">All Organisations</h2>
-    <Card className="overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-brand-background/50 border-b border-black/5">
-              {['Organisation', 'Type', 'Volunteers', 'Tasks', 'Org Code', 'Status'].map(h => (
-                <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5 text-brand-text-primary">
-            {allOrgs.map((org, i) => (
-              <motion.tr
-                key={org.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: i * 0.04 }}
-                className="hover:bg-brand-background/30 transition-colors"
-              >
-                <td className="px-4 py-3">
-                  <div className="font-semibold text-sm">{org.name}</div>
-                  <div className="text-[10px] text-brand-text-secondary">{org.id}</div>
-                </td>
-                <td className="px-4 py-3 text-sm text-brand-text-secondary">{org.type}</td>
-                <td className="px-4 py-3 text-sm font-semibold text-brand-text-primary">{org.volunteers}</td>
-                <td className="px-4 py-3 text-sm font-semibold text-brand-text-primary">{org.tasks}</td>
-                <td className="px-4 py-3">
-                  <span className="font-mono text-xs font-bold text-brand-primary tracking-widest">{org.code}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${statusDot(org.status)}`} />
-                    <span className="text-xs text-brand-text-secondary">{org.status}</span>
-                  </div>
-                </td>
-              </motion.tr>
-            ))}
-          </tbody>
-        </table>
+const OrgsPage = () => {
+  const [orgs,    setOrgs]    = useState<OrgDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  // Per-org counts keyed by orgCode
+  const [counts, setCounts] = useState<Record<string, { volunteers: number; staff: number; tasks: number }>>({});
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'organisations'), async snap => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as OrgDoc));
+      setOrgs(docs);
+      setLoading(false);
+
+      // Fetch counts for each org
+      const newCounts: Record<string, { volunteers: number; staff: number; tasks: number }> = {};
+      await Promise.all(docs.map(async org => {
+        const [volSnap, staffSnap, taskSnap] = await Promise.all([
+          getDocs(query(collection(db, 'users'), where('orgCodeUsed', '==', org.orgCode), where('role', '==', 'volunteer'))),
+          getDocs(query(collection(db, 'users'), where('orgCodeUsed', '==', org.orgCode), where('role', '==', 'org_staff'))),
+          getDocs(query(collection(db, 'tasks'), where('orgCode', '==', org.orgCode))),
+        ]);
+        newCounts[org.orgCode] = {
+          volunteers: volSnap.size,
+          staff:      staffSnap.size,
+          tasks:      taskSnap.size,
+        };
+      }));
+      setCounts(newCounts);
+    });
+    return unsub;
+  }, []);
+
+  if (loading) return (
+    <div className="flex items-center justify-center gap-2 py-20 text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading organisations…
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-heading font-bold">All Organisations</h2>
+        <span className="text-xs text-brand-text-secondary">{orgs.length} registered</span>
       </div>
-    </Card>
-  </div>
-);
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-brand-background/50 border-b border-black/5">
+                {['Organisation', 'Type', 'Size', 'Volunteers', 'Staff', 'Tasks', 'Org Code', 'Admin'].map(h => (
+                  <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black/5 text-brand-text-primary">
+              {orgs.map((org, i) => {
+                const c = counts[org.orgCode] ?? { volunteers: '—', staff: '—', tasks: '—' };
+                return (
+                  <motion.tr key={org.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.04 }}
+                    className="hover:bg-brand-background/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <div className="font-semibold text-sm">{org.orgName}</div>
+                      <div className="text-[10px] text-brand-text-secondary">{fmtTime(org.createdAt)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-brand-text-secondary">{org.orgType}</td>
+                    <td className="px-4 py-3 text-sm text-brand-text-secondary">{org.orgSize}</td>
+                    <td className="px-4 py-3 text-sm font-semibold">{c.volunteers}</td>
+                    <td className="px-4 py-3 text-sm font-semibold">{c.staff}</td>
+                    <td className="px-4 py-3 text-sm font-semibold">{c.tasks}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-xs font-bold text-brand-primary tracking-widest">{org.orgCode}</span>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-brand-text-secondary truncate max-w-[120px]">{org.adminEmail}</td>
+                  </motion.tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+};
 
 // ─── UsersPage ────────────────────────────────────────────────────────────────
 
-const UsersPage = () => (
-  <div className="space-y-4">
-    <h2 className="text-base font-heading font-bold">All Users</h2>
-    <Card className="overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-brand-background/50 border-b border-black/5">
-              {['User', 'Role', 'Organisation', 'Status'].map(h => (
-                <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5 text-brand-text-primary">
-            {allUsers.map((u, i) => (
-              <motion.tr
-                key={u.email}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: i * 0.04 }}
-                className="hover:bg-brand-background/30 transition-colors"
-              >
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-full bg-brand-primary/10 flex items-center justify-center text-[10px] font-bold text-brand-primary shrink-0">
-                      {u.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-sm">{u.name}</p>
-                      <p className="text-[10px] text-brand-text-secondary">{u.email}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${roleStyle(u.role)}`}>
-                    {u.role.replace('_', ' ')}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-sm text-brand-text-secondary">{u.org}</td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${statusDot(u.status)}`} />
-                    <span className="text-xs text-brand-text-secondary">{u.status}</span>
-                  </div>
-                </td>
-              </motion.tr>
-            ))}
-          </tbody>
-        </table>
+const UsersPage = () => {
+  const [users,   setUsers]   = useState<UserDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter,  setFilter]  = useState<'all' | 'org_admin' | 'org_staff' | 'volunteer'>('all');
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'users'), snap => {
+      setUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserDoc)));
+      setLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  const filtered = filter === 'all' ? users : users.filter(u => u.role === filter);
+
+  if (loading) return (
+    <div className="flex items-center justify-center gap-2 py-20 text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading users…
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2 className="text-base font-heading font-bold">All Users <span className="text-brand-text-secondary font-normal text-sm">({filtered.length})</span></h2>
+        <div className="flex gap-1.5 flex-wrap">
+          {(['all', 'org_admin', 'org_staff', 'volunteer'] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide transition-colors
+                ${filter === f ? 'bg-brand-primary text-white' : 'bg-black/5 text-brand-text-secondary hover:bg-black/10'}`}>
+              {f.replace('_', ' ')}
+            </button>
+          ))}
+        </div>
       </div>
-    </Card>
-  </div>
-);
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-brand-background/50 border-b border-black/5">
+                {['User', 'Role', 'Organisation', 'Status'].map(h => (
+                  <th key={h} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-brand-text-secondary whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black/5 text-brand-text-primary">
+              {filtered.map((u, i) => (
+                <motion.tr key={u.uid} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}
+                  className="hover:bg-brand-background/30 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-brand-primary/10 flex items-center justify-center text-[10px] font-bold text-brand-primary shrink-0">
+                        {u.fullName?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() ?? '??'}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm">{u.fullName}</p>
+                        <p className="text-[10px] text-brand-text-secondary">{u.email}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${roleStyle(u.role)}`}>
+                      {u.role?.replace(/_/g, ' ')}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-brand-text-secondary">
+                    {u.orgName ?? '—'}
+                    {(u.orgCodeUsed || u.orgCode) && (
+                      <span className="ml-1 font-mono text-[10px] text-brand-primary">{u.orgCodeUsed ?? u.orgCode}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-1.5 h-1.5 rounded-full ${statusDot(u.status)}`} />
+                      <span className="text-xs text-brand-text-secondary capitalize">{u.status}</span>
+                    </div>
+                  </td>
+                </motion.tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+};
 
 // ─── PerformancePage ──────────────────────────────────────────────────────────
 
-const PerformancePage = () => (
-  <div className="space-y-6">
-    <h2 className="text-base font-heading font-bold">Org Performance Scores</h2>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {orgPerformance.map((org, i) => (
-        <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}>
-          <Card className="p-5">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <p className="font-semibold text-sm text-brand-text-primary">{org.name}</p>
-                <p className="text-[11px] text-brand-text-secondary">{org.volunteers} volunteers · {org.tasks} tasks</p>
-              </div>
-              <div className={`text-2xl font-bold ${org.score >= 90 ? 'text-green-600' : org.score >= 75 ? 'text-brand-primary' : 'text-amber-500'}`}>
-                {org.score}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] text-brand-text-secondary">
-                <span>Overall Score</span>
-                <span className="font-bold">{org.score}/100</span>
-              </div>
-              <div className="h-2 bg-black/5 rounded-full overflow-hidden">
-                <motion.div
-                  className={`h-full rounded-full ${org.score >= 90 ? 'bg-green-500' : org.score >= 75 ? 'bg-brand-primary' : 'bg-amber-500'}`}
-                  style={{ width: 0 }}
-                  animate={{ width: `${org.score}%` }}
-                  transition={{ duration: 0.7, delay: i * 0.08 }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-brand-text-secondary pt-1">
-                <span>Completion Rate</span>
-                <span className="font-bold text-brand-text-primary">{org.completionRate}%</span>
-              </div>
-            </div>
-          </Card>
-        </motion.div>
-      ))}
-    </div>
+const PerformancePage = () => {
+  const [orgStats, setOrgStats] = useState<{
+    orgCode: string; orgName: string; orgType: string;
+    taskCount: number; completedCount: number; volunteerCount: number; completionRate: number;
+  }[]>([]);
+  const [loading, setLoading] = useState(true);
 
-    <h2 className="text-base font-heading font-bold">Geographic Distribution</h2>
-    <Card className="p-5 space-y-4">
-      {geoData.map((g, i) => (
-        <div key={i} className="space-y-1">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Globe className="w-3.5 h-3.5 text-brand-text-secondary" />
-              <span className="font-medium text-brand-text-primary">{g.region}</span>
-            </div>
-            <div className="flex items-center gap-4 text-brand-text-secondary text-xs">
-              <span><span className="font-bold text-brand-text-primary">{g.orgs}</span> orgs</span>
-              <span><span className="font-bold text-brand-text-primary">{g.volunteers}</span> volunteers</span>
-            </div>
-          </div>
-          <div className="h-1.5 bg-black/5 rounded-full overflow-hidden">
-            <motion.div
-              className="h-full bg-brand-primary/70 rounded-full"
-              style={{ width: 0 }}
-              animate={{ width: `${(g.volunteers / 980) * 100}%` }}
-              transition={{ duration: 0.6, delay: i * 0.07 }}
-            />
-          </div>
-        </div>
-      ))}
-    </Card>
-  </div>
-);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'organisations'), async snap => {
+      const orgs = snap.docs.map(d => ({ id: d.id, ...d.data() } as OrgDoc));
+
+      const stats = await Promise.all(orgs.map(async org => {
+        const [taskSnap, volSnap] = await Promise.all([
+          getDocs(query(collection(db, 'tasks'), where('orgCode', '==', org.orgCode))),
+          getDocs(query(collection(db, 'users'), where('orgCodeUsed', '==', org.orgCode), where('role', '==', 'volunteer'))),
+        ]);
+        const taskCount = taskSnap.size;
+        const completedCount = taskSnap.docs.filter(d => d.data().status === 'Completed').length;
+        return {
+          orgCode:        org.orgCode,
+          orgName:        org.orgName,
+          orgType:        org.orgType,
+          taskCount,
+          completedCount,
+          volunteerCount: volSnap.size,
+          completionRate: taskCount > 0 ? Math.round((completedCount / taskCount) * 100) : 0,
+        };
+      }));
+
+      setOrgStats(stats.sort((a, b) => b.completionRate - a.completionRate));
+      setLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  if (loading) return (
+    <div className="flex items-center justify-center gap-2 py-20 text-brand-text-secondary text-sm">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading performance…
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-base font-heading font-bold">Org Performance</h2>
+      {orgStats.length === 0 && (
+        <Card className="p-10 text-center text-sm text-brand-text-secondary">No org data yet.</Card>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {orgStats.map((org, i) => (
+          <motion.div key={org.orgCode} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}>
+            <Card className="p-5">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="font-semibold text-sm text-brand-text-primary">{org.orgName}</p>
+                  <p className="text-[11px] text-brand-text-secondary">{org.volunteerCount} volunteers · {org.taskCount} tasks · {org.orgType}</p>
+                </div>
+                <div className={`text-2xl font-bold ${org.completionRate >= 80 ? 'text-green-600' : org.completionRate >= 50 ? 'text-brand-primary' : 'text-amber-500'}`}>
+                  {org.completionRate}%
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-brand-text-secondary">
+                  <span>Completion Rate</span>
+                  <span className="font-bold">{org.completedCount}/{org.taskCount} tasks</span>
+                </div>
+                <div className="h-2 bg-black/5 rounded-full overflow-hidden">
+                  <motion.div
+                    className={`h-full rounded-full ${org.completionRate >= 80 ? 'bg-green-500' : org.completionRate >= 50 ? 'bg-brand-primary' : 'bg-amber-500'}`}
+                    style={{ width: 0 }}
+                    animate={{ width: `${org.completionRate}%` }}
+                    transition={{ duration: 0.7, delay: i * 0.08 }}
+                  />
+                </div>
+                <p className="text-[10px] font-mono text-brand-text-secondary">{org.orgCode}</p>
+              </div>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 // ─── AnnouncementsPage ────────────────────────────────────────────────────────
 
 const AnnouncementsPage = () => {
-  const [list, setList]         = useState(announcements);
+  const [list,     setList]     = useState<AnnouncementDoc[]>([]);
+  const [loading,  setLoading]  = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm]         = useState({ title: '', body: '', audience: 'All' });
+  const [sending,  setSending]  = useState(false);
+  const [form,     setForm]     = useState({ title: '', body: '', audience: 'All' });
 
-  const send = () => {
+  useEffect(() => {
+    const q = query(
+      collection(db, 'announcements'),
+      orderBy('sentAt', 'desc'),
+      limit(30),
+    );
+    return onSnapshot(q, snap => {
+      setList(snap.docs.map(d => ({ id: d.id, ...d.data() } as AnnouncementDoc)));
+      setLoading(false);
+    });
+  }, []);
+
+  const send = async () => {
     if (!form.title || !form.body) return;
-    setList(prev => [{
-      id: Date.now(), title: form.title, body: form.body,
-      audience: form.audience, sentAt: 'Just now', pinned: false,
-    }, ...prev]);
+    setSending(true);
+    await addDoc(collection(db, 'announcements'), {
+      title:    form.title,
+      body:     form.body,
+      audience: form.audience,
+      sentAt:   serverTimestamp(),
+      pinned:   false,
+    });
     setForm({ title: '', body: '', audience: 'All' });
     setShowForm(false);
+    setSending(false);
+  };
+
+  const remove = async (id: string) => {
+    await updateDoc(doc(db, 'announcements', id), { deleted: true });
+    setList(prev => prev.filter(a => a.id !== id));
   };
 
   return (
@@ -602,43 +737,39 @@ const AnnouncementsPage = () => {
             <Card className="p-5 space-y-3 border border-brand-primary/20">
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Title</label>
-                <input
-                  value={form.title}
-                  onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+                <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                   placeholder="Announcement title…"
-                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm"
-                />
+                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm" />
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Message</label>
-                <textarea
-                  value={form.body}
-                  onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
-                  placeholder="Write your message…"
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm resize-none"
-                />
+                <textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+                  placeholder="Write your message…" rows={3}
+                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm resize-none" />
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Audience</label>
-                <select
-                  value={form.audience}
-                  onChange={e => setForm(f => ({ ...f, audience: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm"
-                >
+                <select value={form.audience} onChange={e => setForm(f => ({ ...f, audience: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg bg-brand-background border border-black/10 focus:border-brand-primary outline-none text-sm">
                   {['All', 'Org Admins', 'Org Staff', 'Volunteers'].map(o => <option key={o}>{o}</option>)}
                 </select>
               </div>
               <div className="flex gap-3 pt-1">
                 <Button variant="ghost" size="sm" className="flex-1" onClick={() => setShowForm(false)}>Cancel</Button>
-                <Button size="sm" className="flex-1 gap-1.5" onClick={send}>
-                  <Megaphone className="w-3 h-3" /> Broadcast
+                <Button size="sm" className="flex-1 gap-1.5" onClick={send} disabled={sending}>
+                  <Megaphone className="w-3 h-3" /> {sending ? 'Sending…' : 'Broadcast'}
                 </Button>
               </div>
             </Card>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {loading && (
+        <div className="flex items-center justify-center gap-2 py-10 text-brand-text-secondary text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading announcements…
+        </div>
+      )}
 
       <div className="space-y-3">
         {list.map((a, i) => (
@@ -654,18 +785,19 @@ const AnnouncementsPage = () => {
                   </div>
                   <p className="font-semibold text-sm text-brand-text-primary">{a.title}</p>
                   <p className="text-xs text-brand-text-secondary mt-1 leading-relaxed">{a.body}</p>
-                  <p className="text-[10px] text-brand-text-secondary mt-2">{a.sentAt}</p>
+                  <p className="text-[10px] text-brand-text-secondary mt-2">{fmtTime(a.sentAt)}</p>
                 </div>
-                <button
-                  onClick={() => setList(prev => prev.filter(x => x.id !== a.id))}
-                  className="text-brand-text-secondary hover:text-brand-text-primary transition-colors shrink-0 mt-0.5"
-                >
+                <button onClick={() => remove(a.id)}
+                  className="text-brand-text-secondary hover:text-brand-text-primary transition-colors shrink-0 mt-0.5">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
             </Card>
           </motion.div>
         ))}
+        {!loading && list.length === 0 && (
+          <Card className="p-10 text-center text-sm text-brand-text-secondary">No announcements yet.</Card>
+        )}
       </div>
     </div>
   );
@@ -677,7 +809,6 @@ const SettingsPage = () => {
   const [settings, setSettings] = useState(
     Object.fromEntries(systemSettings.map(s => [s.key, s.enabled]))
   );
-
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 mb-2">
@@ -691,10 +822,8 @@ const SettingsPage = () => {
               <p className="text-sm font-semibold text-brand-text-primary">{s.label}</p>
               <p className="text-xs text-brand-text-secondary mt-0.5">{s.description}</p>
             </div>
-            <button
-              onClick={() => setSettings(p => ({ ...p, [s.key]: !p[s.key] }))}
-              className="flex items-center gap-2 shrink-0 transition-colors"
-            >
+            <button onClick={() => setSettings(p => ({ ...p, [s.key]: !p[s.key] }))}
+              className="flex items-center gap-2 shrink-0 transition-colors">
               {settings[s.key]
                 ? <><ToggleRight className="w-7 h-7 text-brand-primary" /><span className="text-xs font-medium text-brand-primary hidden sm:inline">On</span></>
                 : <><ToggleLeft  className="w-7 h-7 text-brand-text-secondary" /><span className="text-xs font-medium text-brand-text-secondary hidden sm:inline">Off</span></>}
@@ -710,12 +839,12 @@ const SettingsPage = () => {
 
 const NAV_BASE = [
   { key: 'dashboard',     label: 'Dashboard',      icon: LayoutDashboard },
-  { key: 'approvals',     label: 'Approvals',      icon: ClipboardCheck },
-  { key: 'orgs',          label: 'Organisations',  icon: Building2 },
-  { key: 'users',         label: 'All Users',      icon: Users },
-  { key: 'performance',   label: 'Performance',    icon: BarChart2 },
-  { key: 'announcements', label: 'Announcements',  icon: Megaphone },
-  { key: 'settings',      label: 'Settings',       icon: Settings },
+  { key: 'approvals',     label: 'Approvals',      icon: ClipboardCheck  },
+  { key: 'orgs',          label: 'Organisations',  icon: Building2       },
+  { key: 'users',         label: 'All Users',      icon: Users           },
+  { key: 'performance',   label: 'Performance',    icon: BarChart2       },
+  { key: 'announcements', label: 'Announcements',  icon: Megaphone       },
+  { key: 'settings',      label: 'Settings',       icon: Settings        },
 ] as const;
 
 type NavKey = typeof NAV_BASE[number]['key'];
@@ -731,7 +860,6 @@ export const SuperAdminDashboard = () => {
   const displayName = profile?.fullName ?? 'SuperAdmin';
   const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
-  // Live pending badge count
   useEffect(() => {
     const q = query(
       collection(db, 'users'),
@@ -741,10 +869,7 @@ export const SuperAdminDashboard = () => {
     return onSnapshot(q, snap => setLivePendingCount(snap.size));
   }, []);
 
-  const handleLogout = async () => {
-    await logOut();
-    navigate('/login');
-  };
+  const handleLogout = async () => { await logOut(); navigate('/login'); };
 
   const PageMap: Record<NavKey, ReactElement> = {
     dashboard:     <DashboardHome />,
@@ -768,26 +893,16 @@ export const SuperAdminDashboard = () => {
       {/* ── Sidebar ── */}
       <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
         <div className="p-6 flex flex-col h-full">
-          <div className="mb-8">
-            <Logo />
-          </div>
-
+          <div className="mb-8"><Logo /></div>
           <div className="mb-6 px-4 py-3 bg-white/10 rounded-[8px]">
             <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">👑 SuperAdmin</p>
             <p className="text-sm font-semibold text-white mt-0.5 truncate">{displayName}</p>
           </div>
-
           <nav className="flex-1 space-y-1 overflow-y-auto">
             {NAV_BASE.map(item => (
-              <button
-                key={item.key}
-                onClick={() => setActive(item.key)}
+              <button key={item.key} onClick={() => setActive(item.key)}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-[8px] transition-all text-left
-                  ${active === item.key
-                    ? 'bg-white/10 text-brand-accent font-semibold'
-                    : 'text-white/70 hover:bg-white/5 hover:text-white'
-                  }`}
-              >
+                  ${active === item.key ? 'bg-white/10 text-brand-accent font-semibold' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
                 <item.icon className="w-5 h-5 shrink-0" />
                 <span className="font-medium text-sm flex-1">{item.label}</span>
                 {item.key === 'approvals' && livePendingCount > 0 && (
@@ -798,20 +913,16 @@ export const SuperAdminDashboard = () => {
               </button>
             ))}
           </nav>
-
           <div className="pt-6 border-t border-white/10 mt-auto space-y-3">
             <div className="flex items-center gap-3 px-4">
-              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">
-                {initials}
-              </div>
+              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold shrink-0">{initials}</div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-white truncate">{displayName}</p>
                 <p className="text-[10px] text-white/50">👑 SuperAdmin</p>
               </div>
             </div>
             <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2.5 w-full text-white/70 hover:text-white hover:bg-white/5 rounded-[8px] transition-all">
-              <LogOut className="w-5 h-5" />
-              <span className="font-medium text-sm">Logout</span>
+              <LogOut className="w-5 h-5" /><span className="font-medium text-sm">Logout</span>
             </button>
           </div>
         </div>
@@ -846,13 +957,8 @@ export const SuperAdminDashboard = () => {
         </div>
         <div className="p-4 md:p-6">
           <AnimatePresence mode="wait">
-            <motion.div
-              key={active}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2 }}
-            >
+            <motion.div key={active} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
               {PageMap[active]}
             </motion.div>
           </AnimatePresence>
