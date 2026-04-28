@@ -44,94 +44,47 @@ Behaviour rules:
 
 // ─── Groq call ────────────────────────────────────────────────────────────────
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string;
+async function callGrokForAllocation(
+  tasks: { title: string; impact: number }[],
+  volunteers: Volunteer[],
+): Promise<GrokAllocationResult[]> {
+  const available = volunteers.filter(v => v.available);
 
-async function askGroq(history: Message[], userText: string): Promise<string> {
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...history.map(m => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: m.text })),
-    { role: 'user', content: userText },
-  ];
+  const score = (v: Volunteer, impact: number) =>
+    (impact / 100) * 0.3 +
+    (v.skill / 100) * 0.3 +
+    (v.reliability / 100) * 0.25 +
+    (1 - Math.min(v.distanceKm, 20) / 20) * 0.15;
 
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-  model: 'meta-llama/llama-4-scout-17b-16e-instruct', // ← updated
-  max_tokens: 1024,
-  messages: [{ role: 'user', content: prompt }],
-  temperature: 0.2,
-}),
-  });
+  const assigned = new Set<string>();
+  const results: GrokAllocationResult[] = [];
 
-  if (!res.ok) throw new Error('Groq error');
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content?.trim() ?? 'Sorry, I could not get a response.';
+  // Sort tasks by impact descending so high-impact gets first pick
+  const sorted = [...tasks].sort((a, b) => b.impact - a.impact);
+
+  for (const task of sorted) {
+    const ranked = [...available]
+      .sort((a, b) => score(b, task.impact) - score(a, task.impact));
+
+    const primary = ranked.find(v => !assigned.has(v.name));
+    if (!primary) continue;
+
+    assigned.add(primary.name);
+
+    const backups = ranked
+      .filter(v => v.name !== primary.name)
+      .map(v => v.name);
+
+    results.push({
+      task: task.title,
+      primaryVolunteer: primary.name,
+      reasoning: `Best score on skill (${primary.skill}%), reliability (${primary.reliability}%), and distance (${primary.distanceKm}km).`,
+      rankedVolunteers: backups,
+    });
+  }
+
+  return results;
 }
-
-// ─── Quick replies ────────────────────────────────────────────────────────────
-
-const QUICK_REPLIES = [
-  'How does task allocation work?',
-  'What are the volunteer badges?',
-  'How is my score calculated?',
-  'How do I update my location?',
-];
-
-// ─── SiteBot ──────────────────────────────────────────────────────────────────
-
-export const SiteBot = () => {
-  const [isOpen, setIsOpen]     = useState(false);
-  const [input, setInput]       = useState('');
-  const [loading, setLoading]   = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'bot', text: 'Hey! I\'m the ALIGN Assistant. Ask me anything about the platform, your tasks, or just say hi 👋' },
-  ]);
-
-  const bottomRef  = useRef<HTMLDivElement>(null);
-  const inputRef   = useRef<HTMLInputElement>(null);
-
-  // Auto-scroll on new message
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  // Focus input when opened
-  useEffect(() => {
-    if (isOpen) setTimeout(() => inputRef.current?.focus(), 150);
-  }, [isOpen]);
-
-  const send = async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
-
-    const userMsg: Message = { role: 'user', text: trimmed };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setLoading(true);
-
-    try {
-      const reply = await askGroq(messages, trimmed);
-      setMessages(prev => [...prev, { role: 'bot', text: reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role: 'bot', text: 'Something went wrong. Please try again.' }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input); }
-  };
-
-  const showQuickReplies = messages.length === 1;
-
-  return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
-
       {/* ── Chat panel ─────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {isOpen && (

@@ -56,6 +56,8 @@ interface AllocationRow {
 
 // ─── AI Allocation Engine (Groq · Llama 3.3 70B) ────────────────────────────────
 
+// ─── Allocation Engine (local scoring) ───────────────────────────────────────
+
 interface Volunteer {
   name: string;
   skill: number;
@@ -70,61 +72,40 @@ interface GrokAllocationResult {
   reasoning: string;
   rankedVolunteers: string[];
 }
-console.log('GROQ KEY:', import.meta.env.VITE_GROQ_API_KEY);
+
 async function callGrokForAllocation(
   tasks: { title: string; impact: number }[],
   volunteers: Volunteer[],
 ): Promise<GrokAllocationResult[]> {
-  const prompt = `
-You are a volunteer allocation engine for an NGO. Assign the best volunteer to each task.
+  const available = volunteers.filter(v => v.available);
 
-TASKS:
-${tasks.map(t => `- "${t.title}" (impact score: ${t.impact}/100)`).join('\n')}
+  const score = (v: Volunteer, impact: number) =>
+    (impact / 100) * 0.3 +
+    (v.skill / 100) * 0.3 +
+    (v.reliability / 100) * 0.25 +
+    (1 - Math.min(v.distanceKm, 20) / 20) * 0.15;
 
-VOLUNTEERS (name | skill% | reliability% | distance km | available):
-${volunteers.map(v =>
-  `- ${v.name} | skill:${v.skill}% | reliability:${v.reliability}% | distance:${v.distanceKm}km | available:${v.available ? 'yes' : 'no'}`
-).join('\n')}
+  const assigned = new Set<string>();
+  const results: GrokAllocationResult[] = [];
 
-RULES:
-1. Only assign available volunteers.
-2. Prioritise: (impact score × 0.3) + (skill × 0.3) + (reliability × 0.25) + (distance penalty: max 0.15, closer = higher).
-3. Each volunteer can only be primary for ONE task. They may appear as backups for others.
-4. For each task return ALL volunteers ranked best→worst as backups (excluding the primary).
+  const sorted = [...tasks].sort((a, b) => b.impact - a.impact);
 
-Respond ONLY with a valid JSON array, no markdown, no explanation:
-[
-  {
-    "task": "<task title>",
-    "primaryVolunteer": "<name>",
-    "reasoning": "<one sentence>",
-    "rankedVolunteers": ["<backup1>", "<backup2>"]
+  for (const task of sorted) {
+    const ranked = [...available].sort((a, b) => score(b, task.impact) - score(a, task.impact));
+    const primary = ranked.find(v => !assigned.has(v.name));
+    if (!primary) continue;
+
+    assigned.add(primary.name);
+
+    results.push({
+      task: task.title,
+      primaryVolunteer: primary.name,
+      reasoning: `Best score — skill ${primary.skill}%, reliability ${primary.reliability}%, distance ${primary.distanceKm}km.`,
+      rankedVolunteers: ranked.filter(v => v.name !== primary.name).map(v => v.name),
+    });
   }
-]`.trim();
 
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-    }),
-  });
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    console.error('Groq error:', JSON.stringify(errBody, null, 2));
-    throw new Error(`Groq ${res.status}: ${errBody?.error?.message ?? JSON.stringify(errBody)}`);
-  }
-  const data = await res.json();
-  const raw = data.choices[0].message.content.trim();
-  const cleaned = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(cleaned) as GrokAllocationResult[];
+  return results;
 }
 
 // ─── Dummy data ────────────────────────────────────────────────────────────────
