@@ -18,6 +18,9 @@ export interface UserProfile {
   fullName?: string;
   location?: string;
   skills?: string[];
+  phone?: string;
+  availability?: string[];
+  notifications?: boolean;
   // org_admin fields
   orgName?: string;
   orgType?: string;

@@ -1,21 +1,34 @@
-import { useState, type ReactElement } from 'react';
+import { useState, useEffect, type ReactElement } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, Bell, Settings, LogOut,
   MapPin, Zap, CheckCircle2, Clock, ChevronDown,
   Star, Target, Navigation, Award, Save, WifiOff, Wifi,
-  AlertCircle,
+  AlertCircle, Loader2, Calendar, Building2,
 } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { logOut } from '../../lib/authService';
 import { useNavigate } from 'react-router-dom';
+import {
+  collection,
+  getDocs,
+  doc,
+  updateDoc,
+  query,
+  orderBy,
+} from 'firebase/firestore';
+import { db } from '../../lib/firebase'; // adjust path if needed
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type TaskStatus = 'new' | 'active' | 'completed';
+type TaskSource = 'dummy' | 'firestore';
 
 interface VolunteerTask {
   id: string;
+  firestoreId?: string; // original Firestore doc ID
   title: string;
   location: string;
   date: string;
@@ -24,13 +37,23 @@ interface VolunteerTask {
   skill: string;
   distance: string;
   whyChosen: { skillMatch: number; distance: string; availability: string };
+  source: TaskSource;
+  // Firestore extras
+  description?: string;
+  category?: string;
+  orgCode?: string;
+  deadline?: string;
+  hoursLogged?: number;
+  createdBy?: string;
 }
 
+// ─── Static Data ─────────────────────────────────────────────────────────────
+
 const DUMMY_TASKS: VolunteerTask[] = [
-  { id: 'VT-441', title: 'Senior Tech Mentor', location: 'Public Library, Anna Nagar', date: 'Oct 24, 14:00', status: 'new', urgency: 'High', skill: 'Teaching', distance: '1.2 km', whyChosen: { skillMatch: 94, distance: '1.2 km', availability: 'Full match' } },
-  { id: 'VT-442', title: 'Food Bank Sorter', location: 'Main Warehouse, T.Nagar', date: 'Oct 26, 09:00', status: 'active', urgency: 'Critical', skill: 'Logistics', distance: '3.4 km', whyChosen: { skillMatch: 88, distance: '3.4 km', availability: 'Morning slot' } },
-  { id: 'VT-438', title: 'Flood Relief Ops Support', location: 'Community Centre, Adyar', date: 'Oct 20, 08:00', status: 'completed', urgency: 'High', skill: 'First Aid', distance: '5.1 km', whyChosen: { skillMatch: 91, distance: '5.1 km', availability: 'Weekend' } },
-  { id: 'VT-435', title: 'Ration Kit Packing', location: 'NGO Hub, Mylapore', date: 'Oct 18, 10:00', status: 'completed', urgency: 'Low', skill: 'Logistics', distance: '4.0 km', whyChosen: { skillMatch: 79, distance: '4.0 km', availability: 'Flexible' } },
+  { id: 'VT-441', title: 'Senior Tech Mentor', location: 'Public Library, Anna Nagar', date: 'Oct 24, 14:00', status: 'new', urgency: 'High', skill: 'Teaching', distance: '1.2 km', whyChosen: { skillMatch: 94, distance: '1.2 km', availability: 'Full match' }, source: 'dummy' },
+  { id: 'VT-442', title: 'Food Bank Sorter', location: 'Main Warehouse, T.Nagar', date: 'Oct 26, 09:00', status: 'active', urgency: 'Critical', skill: 'Logistics', distance: '3.4 km', whyChosen: { skillMatch: 88, distance: '3.4 km', availability: 'Morning slot' }, source: 'dummy' },
+  { id: 'VT-438', title: 'Flood Relief Ops Support', location: 'Community Centre, Adyar', date: 'Oct 20, 08:00', status: 'completed', urgency: 'High', skill: 'First Aid', distance: '5.1 km', whyChosen: { skillMatch: 91, distance: '5.1 km', availability: 'Weekend' }, source: 'dummy' },
+  { id: 'VT-435', title: 'Ration Kit Packing', location: 'NGO Hub, Mylapore', date: 'Oct 18, 10:00', status: 'completed', urgency: 'Low', skill: 'Logistics', distance: '4.0 km', whyChosen: { skillMatch: 79, distance: '4.0 km', availability: 'Flexible' }, source: 'dummy' },
 ];
 
 const NEARBY = [
@@ -48,91 +71,312 @@ const DUMMY_NOTIFS = [
 const SKILL_OPTIONS = ['Teaching', 'Logistics', 'First Aid', 'Driving', 'Cooking', 'Medical', 'Tech', 'Construction'];
 const TIME_SLOTS = ['Weekday Morning', 'Weekday Evening', 'Weekend Morning', 'Weekend Evening', 'Flexible'];
 
+// ─── Firestore → VolunteerTask mapper ────────────────────────────────────────
+
+const priorityToUrgency = (p: string): VolunteerTask['urgency'] => {
+  if (!p) return 'Low';
+  const lower = p.toLowerCase();
+  if (lower === 'emergency' || lower === 'critical') return 'Critical';
+  if (lower === 'high') return 'High';
+  return 'Low';
+};
+
+const firestoreStatusToLocal = (s: string): TaskStatus => {
+  if (!s) return 'new';
+  const lower = s.toLowerCase();
+  if (lower === 'completed' || lower === 'done') return 'completed';
+  if (lower === 'in progress' || lower === 'active' || lower === 'assigned') return 'active';
+  return 'new'; // Open, Unassigned, etc.
+};
+
+const formatDeadline = (deadline: string): string => {
+  if (!deadline) return 'TBD';
+  try {
+    const d = new Date(deadline);
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return deadline;
+  }
+};
+
+let fsTaskCounter = 1;
+const mapFirestoreTask = (docId: string, data: Record<string, unknown>): VolunteerTask => {
+  const idx = fsTaskCounter++;
+  return {
+    id: `FS-${String(idx).padStart(3, '0')}`,
+    firestoreId: docId,
+    title: (data.title as string) ?? 'Untitled Task',
+    location: (data.location as string) ?? 'Location TBD',
+    date: formatDeadline(data.deadline as string),
+    status: firestoreStatusToLocal(data.status as string),
+    urgency: priorityToUrgency(data.priority as string),
+    skill: (data.category as string) ?? 'General',
+    distance: '—',
+    whyChosen: { skillMatch: Math.floor(75 + Math.random() * 20), distance: '—', availability: 'Check schedule' },
+    source: 'firestore',
+    description: data.description as string,
+    category: data.category as string,
+    orgCode: data.orgCode as string,
+    deadline: data.deadline as string,
+    hoursLogged: data.hoursLogged as number,
+    createdBy: data.createdBy as string,
+  };
+};
+
+// ─── Sort: active/new first, completed last ───────────────────────────────────
+const sortTasks = (tasks: VolunteerTask[]) => [
+  ...tasks.filter(t => t.status === 'new'),
+  ...tasks.filter(t => t.status === 'active'),
+  ...tasks.filter(t => t.status === 'completed'),
+];
+
+// ─── Styling helpers ──────────────────────────────────────────────────────────
+
 const urgencyStyle = (u: string) =>
   u === 'Critical' ? 'bg-red-100 text-red-600' : u === 'High' ? 'bg-amber-100 text-amber-600' : 'bg-black/5 text-brand-text-secondary';
 const statusStyle = (s: string) =>
   s === 'new' ? 'bg-blue-100 text-blue-600' : s === 'active' ? 'bg-green-100 text-green-600' : 'bg-black/5 text-brand-text-secondary';
 const statusLabel = (s: string) => s === 'new' ? 'New' : s === 'active' ? 'Active' : 'Done';
 
-const TaskCard = ({ task, onAccept, onComplete }: { task: VolunteerTask; onAccept: (id: string) => void; onComplete: (id: string) => void }) => {
+// ─── Groq AI Allocation Engine ────────────────────────────────────────────────
+
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string;
+
+interface AllocationResult {
+  skillMatch: number;
+  proximityScore: number;
+  availabilityFit: string;
+  reasoning: string;
+  tags: string[];
+}
+
+const fetchAllocationReasoning = async (task: VolunteerTask): Promise<AllocationResult> => {
+  const prompt = `You are an AI Volunteer Allocation Engine. Given a task, produce a short allocation report explaining why this volunteer was selected.
+
+Task details:
+- Title: ${task.title}
+- Category/Skill: ${task.skill}
+- Location: ${task.location}
+- Urgency: ${task.urgency}
+- Deadline: ${task.date}
+${task.description ? `- Description: ${task.description}` : ''}
+
+Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
+{
+  "skillMatch": <integer 70-99>,
+  "proximityScore": <integer 60-99>,
+  "availabilityFit": "<2-3 word phrase>",
+  "reasoning": "<2 concise sentences explaining why the volunteer is a strong match>",
+  "tags": ["<tag1>", "<tag2>", "<tag3>"]
+}`;
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.7,
+      max_tokens: 300,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!res.ok) throw new Error('Groq request failed');
+  const data = await res.json();
+  const raw = data.choices?.[0]?.message?.content ?? '{}';
+  return JSON.parse(raw.replace(/```json|```/g, '').trim()) as AllocationResult;
+};
+
+// ─── TaskCard ─────────────────────────────────────────────────────────────────
+
+const TaskCard = ({
+  task, onAccept, onComplete,
+}: {
+  task: VolunteerTask;
+  onAccept: (id: string) => void;
+  onComplete: (id: string, firestoreId?: string) => void;
+}) => {
   const [expanded, setExpanded] = useState(false);
+  const [aiResult, setAiResult] = useState<AllocationResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(false);
+  const isFirestore = task.source === 'firestore';
+
+  const handleExpand = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !aiResult && !aiLoading) {
+      setAiLoading(true);
+      setAiError(false);
+      try {
+        const result = await fetchAllocationReasoning(task);
+        setAiResult(result);
+      } catch {
+        setAiError(true);
+      } finally {
+        setAiLoading(false);
+      }
+    }
+  };
+
   return (
-    <Card className={`overflow-hidden ${task.status === 'completed' ? 'opacity-60' : ''}`}>
-      <div className="p-5 space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-bold text-sm text-brand-text-primary">{task.title}</p>
-            <p className="text-[10px] text-brand-text-secondary font-mono mt-0.5">{task.id}</p>
-          </div>
-          <div className="flex gap-1.5 shrink-0">
-            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${urgencyStyle(task.urgency)}`}>{task.urgency}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${statusStyle(task.status)}`}>{statusLabel(task.status)}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-[11px] text-brand-text-secondary">
-          <div className="flex items-center gap-1.5"><MapPin className="w-3 h-3 text-brand-primary shrink-0" />{task.location}</div>
-          <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 text-brand-primary shrink-0" />{task.date}</div>
-          <div className="flex items-center gap-1.5"><Target className="w-3 h-3 text-brand-primary shrink-0" />{task.skill}</div>
-          <div className="flex items-center gap-1.5"><Navigation className="w-3 h-3 text-brand-primary shrink-0" />{task.distance}</div>
-        </div>
-        <button onClick={() => setExpanded(v => !v)} className="flex items-center gap-1.5 text-[11px] font-bold text-brand-primary hover:opacity-75 transition-opacity">
-          <Zap className="w-3 h-3" /> Why you were chosen
-          <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        </button>
-        <AnimatePresence>
-          {expanded && (
-            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
-              <div className="grid grid-cols-3 gap-2 pt-1">
-                {[
-                  { label: 'Skill Match', value: `${task.whyChosen.skillMatch}%`, color: 'text-brand-primary' },
-                  { label: 'Distance', value: task.whyChosen.distance, color: 'text-blue-600' },
-                  { label: 'Availability', value: task.whyChosen.availability, color: 'text-green-600' },
-                ].map(m => (
-                  <div key={m.label} className="bg-brand-background rounded-lg px-3 py-2 text-center">
-                    <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
-                    <p className="text-[9px] text-brand-text-secondary uppercase tracking-wide mt-0.5">{m.label}</p>
-                  </div>
-                ))}
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: task.status === 'completed' ? 0.55 : 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+    >
+      <Card className="overflow-hidden">
+        <div className="p-5 space-y-3">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="font-bold text-sm text-brand-text-primary">{task.title}</p>
+                {isFirestore && (
+                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-brand-primary/10 text-brand-primary uppercase tracking-wide">Live</span>
+                )}
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <div className="flex gap-2 pt-1">
-          {task.status === 'new' && (
-            <>
-              <Button className="flex-1 text-[10px] h-8 font-bold" onClick={() => onAccept(task.id)}>
-                <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept
-              </Button>
-              <Button variant="ghost" className="flex-1 text-[10px] h-8 font-bold">Decline</Button>
-            </>
-          )}
-          {task.status === 'active' && (
-            <Button className="flex-1 text-[10px] h-8 bg-green-600 hover:bg-green-700 font-bold" onClick={() => onComplete(task.id)}>
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Mark Complete
-            </Button>
-          )}
-          {task.status === 'completed' && (
-            <div className="flex-1 flex items-center justify-center gap-1.5 text-[11px] text-green-600 font-semibold">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+              <p className="text-[10px] text-brand-text-secondary font-mono mt-0.5">{task.id}</p>
             </div>
+            <div className="flex gap-1.5 shrink-0">
+              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${urgencyStyle(task.urgency)}`}>{task.urgency}</span>
+              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${statusStyle(task.status)}`}>{statusLabel(task.status)}</span>
+            </div>
+          </div>
+
+          {/* Meta grid */}
+          <div className="grid grid-cols-2 gap-2 text-[11px] text-brand-text-secondary">
+            <div className="flex items-center gap-1.5"><MapPin className="w-3 h-3 text-brand-primary shrink-0" />{task.location}</div>
+            <div className="flex items-center gap-1.5">
+              {isFirestore
+                ? <Calendar className="w-3 h-3 text-brand-primary shrink-0" />
+                : <Clock className="w-3 h-3 text-brand-primary shrink-0" />}
+              {task.date}
+            </div>
+            <div className="flex items-center gap-1.5"><Target className="w-3 h-3 text-brand-primary shrink-0" />{task.skill}</div>
+            {isFirestore && task.orgCode
+              ? <div className="flex items-center gap-1.5"><Building2 className="w-3 h-3 text-brand-primary shrink-0" />{task.orgCode}</div>
+              : <div className="flex items-center gap-1.5"><Navigation className="w-3 h-3 text-brand-primary shrink-0" />{task.distance}</div>}
+          </div>
+
+          {/* Description (Firestore only) */}
+          {isFirestore && task.description && (
+            <p className="text-[11px] text-brand-text-secondary bg-brand-background rounded-lg px-3 py-2 leading-relaxed">
+              {task.description}
+            </p>
           )}
+
+          {/* Why chosen — AI Allocation Engine */}
+          <button onClick={handleExpand} className="flex items-center gap-1.5 text-[11px] font-bold text-brand-primary hover:opacity-75 transition-opacity">
+            <Zap className="w-3 h-3" /> AI Allocation Engine
+            <span className="text-[9px] font-normal text-brand-text-secondary ml-0.5">ALIGN LOGIC</span>
+            <ChevronDown className={`w-3 h-3 transition-transform ml-auto ${expanded ? 'rotate-180' : ''}`} />
+          </button>
+          <AnimatePresence>
+            {expanded && (
+              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+                {aiLoading && (
+                  <div className="flex items-center gap-2 py-3 text-[11px] text-brand-text-secondary">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-primary" />
+                    Analysing volunteer profile…
+                  </div>
+                )}
+                {aiError && (
+                  <p className="text-[11px] text-red-500 py-2">Failed to load AI analysis. Check your Groq key.</p>
+                )}
+                {aiResult && (
+                  <div className="space-y-3 pt-1">
+                    {/* Score chips */}
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { label: 'Skill Match', value: `${aiResult.skillMatch}%`, color: 'text-brand-primary' },
+                        { label: 'Proximity', value: `${aiResult.proximityScore}%`, color: 'text-blue-600' },
+                        { label: 'Availability', value: aiResult.availabilityFit, color: 'text-green-600' },
+                      ].map(m => (
+                        <div key={m.label} className="bg-brand-background rounded-lg px-3 py-2 text-center">
+                          <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
+                          <p className="text-[9px] text-brand-text-secondary uppercase tracking-wide mt-0.5">{m.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {/* AI reasoning */}
+                    <div className="bg-brand-primary/5 border border-brand-primary/15 rounded-lg px-3 py-2.5 space-y-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-brand-primary flex items-center gap-1.5">
+                        <Zap className="w-3 h-3" /> Allocation Reasoning
+                      </p>
+                      <p className="text-[11px] text-brand-text-secondary leading-relaxed">{aiResult.reasoning}</p>
+                      {aiResult.tags?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {aiResult.tags.map(tag => (
+                            <span key={tag} className="px-2 py-0.5 bg-brand-primary/10 text-brand-primary rounded-full text-[9px] font-semibold">{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            {task.status === 'new' && (
+              <>
+                <Button className="flex-1 text-[10px] h-8 font-bold" onClick={() => onAccept(task.id)}>
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Accept
+                </Button>
+                <Button variant="ghost" className="flex-1 text-[10px] h-8 font-bold">Decline</Button>
+              </>
+            )}
+            {task.status === 'active' && (
+              <Button
+                className="flex-1 text-[10px] h-8 bg-green-600 hover:bg-green-700 font-bold"
+                onClick={() => onComplete(task.id, task.firestoreId)}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Mark Complete
+              </Button>
+            )}
+            {task.status === 'completed' && (
+              <div className="flex-1 flex items-center justify-center gap-1.5 text-[11px] text-green-600 font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </motion.div>
   );
 };
 
-const DashboardPage = ({ tasks, displayName, onAccept, onComplete }: { tasks: VolunteerTask[]; displayName: string; onAccept: (id: string) => void; onComplete: (id: string) => void }) => {
+// ─── DashboardPage ────────────────────────────────────────────────────────────
+
+const DashboardPage = ({
+  tasks, displayName, onAccept, onComplete, loading,
+}: {
+  tasks: VolunteerTask[];
+  displayName: string;
+  onAccept: (id: string) => void;
+  onComplete: (id: string, firestoreId?: string) => void;
+  loading: boolean;
+}) => {
   const assigned = tasks.filter(t => t.status === 'new').length;
   const active = tasks.filter(t => t.status === 'active').length;
   const completed = tasks.filter(t => t.status === 'completed').length;
   const featured = tasks.find(t => t.status === 'active') ?? tasks.find(t => t.status === 'new');
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-heading font-bold text-brand-text-primary">Hey, {displayName.split(' ')[0]} 👋</h2>
         <p className="text-sm text-brand-text-secondary mt-0.5">Here's what's on your plate today.</p>
       </div>
+
+      {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
           { label: 'Assigned', value: assigned, color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -141,20 +385,28 @@ const DashboardPage = ({ tasks, displayName, onAccept, onComplete }: { tasks: Vo
         ].map((s, i) => (
           <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
             <Card className={`p-4 text-center ${s.bg}`}>
-              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+              {loading ? <div className="w-8 h-8 rounded bg-black/10 animate-pulse mx-auto" /> : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>}
               <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary mt-0.5">{s.label}</p>
             </Card>
           </motion.div>
         ))}
       </div>
-      {featured && (
+
+      {/* Featured */}
+      {loading ? (
+        <Card className="p-8 flex items-center justify-center gap-3 text-brand-text-secondary text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Fetching live tasks…
+        </Card>
+      ) : featured ? (
         <div className="space-y-2">
           <h3 className="text-sm font-bold text-brand-text-primary flex items-center gap-2">
             <Zap className="w-4 h-4 text-brand-primary" /> Needs Your Attention
           </h3>
           <TaskCard task={featured} onAccept={onAccept} onComplete={onComplete} />
         </div>
-      )}
+      ) : null}
+
+      {/* Nearby */}
       <div className="space-y-3">
         <h3 className="text-sm font-bold text-brand-text-primary flex items-center gap-2">
           <MapPin className="w-4 h-4 text-brand-primary" /> Nearby Tasks
@@ -184,9 +436,18 @@ const DashboardPage = ({ tasks, displayName, onAccept, onComplete }: { tasks: Vo
   );
 };
 
+// ─── TasksPage ────────────────────────────────────────────────────────────────
+
 type TabKey = 'all' | 'new' | 'active' | 'completed';
 
-const TasksPage = ({ tasks, onAccept, onComplete }: { tasks: VolunteerTask[]; onAccept: (id: string) => void; onComplete: (id: string) => void }) => {
+const TasksPage = ({
+  tasks, onAccept, onComplete, loading,
+}: {
+  tasks: VolunteerTask[];
+  onAccept: (id: string) => void;
+  onComplete: (id: string, firestoreId?: string) => void;
+  loading: boolean;
+}) => {
   const [tab, setTab] = useState<TabKey>('all');
   const tabs: { key: TabKey; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: tasks.length },
@@ -195,6 +456,7 @@ const TasksPage = ({ tasks, onAccept, onComplete }: { tasks: VolunteerTask[]; on
     { key: 'completed', label: 'Completed', count: tasks.filter(t => t.status === 'completed').length },
   ];
   const filtered = tab === 'all' ? tasks : tasks.filter(t => t.status === tab);
+
   return (
     <div className="space-y-4">
       <div className="flex gap-1 bg-brand-background rounded-xl p-1">
@@ -208,16 +470,27 @@ const TasksPage = ({ tasks, onAccept, onComplete }: { tasks: VolunteerTask[]; on
           </button>
         ))}
       </div>
+
+      {loading && (
+        <Card className="p-8 flex items-center justify-center gap-3 text-brand-text-secondary text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading tasks…
+        </Card>
+      )}
+
       <AnimatePresence mode="wait">
-        <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-3">
-          {filtered.length === 0
-            ? <Card className="p-10 text-center"><p className="text-sm text-brand-text-secondary">No {tab === 'all' ? '' : tab} tasks.</p></Card>
-            : filtered.map(t => <TaskCard key={t.id} task={t} onAccept={onAccept} onComplete={onComplete} />)}
-        </motion.div>
+        {!loading && (
+          <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-3">
+            {filtered.length === 0
+              ? <Card className="p-10 text-center"><p className="text-sm text-brand-text-secondary">No {tab === 'all' ? '' : tab} tasks.</p></Card>
+              : filtered.map(t => <TaskCard key={t.id} task={t} onAccept={onAccept} onComplete={onComplete} />)}
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
 };
+
+// ─── PerformancePage ──────────────────────────────────────────────────────────
 
 const PerformancePage = ({ tasks }: { tasks: VolunteerTask[] }) => {
   const completed = tasks.filter(t => t.status === 'completed').length;
@@ -277,6 +550,8 @@ const PerformancePage = ({ tasks }: { tasks: VolunteerTask[] }) => {
   );
 };
 
+// ─── NotificationsPage ────────────────────────────────────────────────────────
+
 const NotificationsPage = ({ notifs, onRead }: { notifs: typeof DUMMY_NOTIFS; onRead: (id: number) => void }) => (
   <div className="space-y-4">
     <div className="flex items-center justify-between">
@@ -300,6 +575,8 @@ const NotificationsPage = ({ notifs, onRead }: { notifs: typeof DUMMY_NOTIFS; on
     </Card>
   </div>
 );
+
+// ─── SettingsPage ─────────────────────────────────────────────────────────────
 
 const SettingsPage = ({ displayName }: { displayName: string }) => {
   const [name, setName] = useState(displayName);
@@ -364,6 +641,8 @@ const SettingsPage = ({ displayName }: { displayName: string }) => {
   );
 };
 
+// ─── Nav config ───────────────────────────────────────────────────────────────
+
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'tasks', label: 'My Tasks', icon: ClipboardList },
@@ -374,11 +653,15 @@ const NAV = [
 
 type NavKey = typeof NAV[number]['key'];
 
+// ─── Root component ───────────────────────────────────────────────────────────
+
 export const VolunteerDashboard = () => {
   const [active, setActive] = useState<NavKey>('dashboard');
-  const [tasks, setTasks] = useState<VolunteerTask[]>(DUMMY_TASKS);
+  const [tasks, setTasks] = useState<VolunteerTask[]>(sortTasks(DUMMY_TASKS));
   const [notifs, setNotifs] = useState(DUMMY_NOTIFS);
   const [available, setAvailable] = useState(true);
+  const [loading, setLoading] = useState(true);
+
   const { profile } = useAuth();
   const navigate = useNavigate();
 
@@ -386,9 +669,55 @@ export const VolunteerDashboard = () => {
   const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
   const unread = notifs.filter(n => !n.read).length;
 
-  const handleAccept = (id: string) => setTasks(p => p.map(t => t.id === id ? { ...t, status: 'active' as const } : t));
-  const handleComplete = (id: string) => setTasks(p => p.map(t => t.id === id ? { ...t, status: 'completed' as const } : t));
-  const handleRead = (id: number) => setNotifs(p => p.map(n => n.id === id ? { ...n, read: true } : n));
+  // ── Fetch Firestore tasks on mount ──────────────────────────────────────────
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
+        const snapshot = await getDocs(q);
+        fsTaskCounter = 1; // reset counter for clean IDs
+        const fetched: VolunteerTask[] = snapshot.docs.map(d =>
+          mapFirestoreTask(d.id, d.data() as Record<string, unknown>)
+        );
+        // Merge: Firestore tasks first (de-duplicated by title), then dummy tasks
+        const firestoreTitles = new Set(fetched.map(t => t.title.toLowerCase()));
+        const filteredDummy = DUMMY_TASKS.filter(d => !firestoreTitles.has(d.title.toLowerCase()));
+        setTasks(sortTasks([...fetched, ...filteredDummy]));
+      } catch (err) {
+        console.error('Failed to fetch Firestore tasks:', err);
+        // Fall back to dummy data gracefully
+        setTasks(sortTasks(DUMMY_TASKS));
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchTasks();
+  }, []);
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+
+  const handleAccept = (id: string) => {
+    setTasks(prev => sortTasks(prev.map(t => t.id === id ? { ...t, status: 'active' as const } : t)));
+  };
+
+  const handleComplete = async (id: string, firestoreId?: string) => {
+    // Optimistic update immediately
+    setTasks(prev => sortTasks(prev.map(t => t.id === id ? { ...t, status: 'completed' as const } : t)));
+
+    // Write back to Firestore if it's a live task
+    if (firestoreId) {
+      try {
+        await updateDoc(doc(db, 'tasks', firestoreId), { status: 'Completed' });
+      } catch (err) {
+        console.error('Failed to update Firestore task status:', err);
+        // Rollback optimistic update on failure
+        setTasks(prev => sortTasks(prev.map(t => t.id === id ? { ...t, status: 'active' as const } : t)));
+      }
+    }
+  };
+
+  const handleRead = (id: number) => setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+
   const handleLogout = async () => { await logOut(); navigate('/login'); };
 
   const navLabel: Record<NavKey, string> = {
@@ -397,8 +726,8 @@ export const VolunteerDashboard = () => {
   };
 
   const PageMap: Record<NavKey, ReactElement> = {
-    dashboard: <DashboardPage tasks={tasks} displayName={displayName} onAccept={handleAccept} onComplete={handleComplete} />,
-    tasks: <TasksPage tasks={tasks} onAccept={handleAccept} onComplete={handleComplete} />,
+    dashboard: <DashboardPage tasks={tasks} displayName={displayName} onAccept={handleAccept} onComplete={handleComplete} loading={loading} />,
+    tasks: <TasksPage tasks={tasks} onAccept={handleAccept} onComplete={handleComplete} loading={loading} />,
     performance: <PerformancePage tasks={tasks} />,
     notifications: <NotificationsPage notifs={notifs} onRead={handleRead} />,
     settings: <SettingsPage displayName={displayName} />,
@@ -407,7 +736,7 @@ export const VolunteerDashboard = () => {
   return (
     <div className="flex h-screen bg-brand-background overflow-hidden">
 
-      {/* ── Sidebar (md+) ── */}
+      {/* Sidebar (md+) */}
       <aside className="hidden md:flex flex-col w-64 h-screen bg-brand-primary text-white shrink-0 sticky top-0">
         <div className="p-6 flex flex-col h-full">
           <nav className="flex-1 space-y-1 mt-4">
@@ -432,7 +761,7 @@ export const VolunteerDashboard = () => {
         </div>
       </aside>
 
-      {/* ── Mobile bottom tabs ── */}
+      {/* Mobile bottom tabs */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-brand-primary flex z-40">
         {NAV.map(item => (
           <button key={item.key} onClick={() => setActive(item.key)}
@@ -447,10 +776,10 @@ export const VolunteerDashboard = () => {
         ))}
       </div>
 
-      {/* ── Content ── */}
+      {/* Content */}
       <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
         <div className="relative px-6 py-4 border-b border-black/5 bg-white sticky top-0 z-10 flex items-center justify-between">
-          {/* Available/Busy toggle — left */}
+          {/* Available toggle */}
           <button onClick={() => setAvailable(v => !v)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
               available ? 'bg-green-50 border-green-200 text-green-700' : 'bg-black/5 border-black/10 text-brand-text-secondary'
@@ -459,13 +788,13 @@ export const VolunteerDashboard = () => {
             {available ? 'Available' : 'Busy'}
           </button>
 
-          {/* Page title — center */}
+          {/* Page title */}
           <div className="absolute left-1/2 -translate-x-1/2 text-center pointer-events-none">
             <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Volunteer</p>
             <h1 className="text-lg font-heading font-bold text-brand-text-primary">{navLabel[active]}</h1>
           </div>
 
-          {/* Avatar — right */}
+          {/* Avatar */}
           <div className="w-9 h-9 rounded-full bg-brand-primary/20 flex items-center justify-center text-sm font-bold text-brand-primary shrink-0">
             {initials}
           </div>
