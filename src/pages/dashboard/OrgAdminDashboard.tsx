@@ -70,7 +70,7 @@ interface GrokAllocationResult {
   reasoning: string;
   rankedVolunteers: string[];
 }
-
+console.log('GROQ KEY:', import.meta.env.VITE_GROQ_API_KEY);
 async function callGrokForAllocation(
   tasks: { title: string; impact: number }[],
   volunteers: Volunteer[],
