@@ -1,61 +1,107 @@
-// ─── Location Types ───────────────────────────────────────────────────────────
+// ─── locationUtils.ts ────────────────────────────────────────────────────────
+// Pure helpers: Haversine distance, proximity scoring, formatting,
+// geolocation wrappers, and reverse-geocoding.
+// No React imports — safe to use in hooks, services, and components.
 
-export interface GeoCoords {
+// ─── Core geo types ───────────────────────────────────────────────────────────
+
+export interface LatLng {
   lat: number;
   lng: number;
 }
 
-export type LocationStatus = 'idle' | 'requesting' | 'granted' | 'denied' | 'unavailable';
+/** Alias used by LocationSection / useProximityAlerts. */
+export type GeoCoords = LatLng;
 
-// ─── Haversine Distance ───────────────────────────────────────────────────────
+export type LocationStatus = 'idle' | 'requesting' | 'granted' | 'denied';
+
+// ─── Haversine ────────────────────────────────────────────────────────────────
 
 /**
- * Returns distance in kilometres between two lat/lng points.
- * Uses the Haversine formula (spherical Earth approximation).
+ * Great-circle distance between two points, in kilometres.
  */
-export function getDistanceKm(a: GeoCoords, b: GeoCoords): number {
-  const R = 6371; // Earth radius in km
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const sinLat = Math.sin(dLat / 2);
-  const sinLng = Math.sin(dLng / 2);
+export function getDistanceKm(a: LatLng, b: LatLng): number {
+  const R = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
   const h =
-    sinLat * sinLat +
-    Math.cos((a.lat * Math.PI) / 180) *
-      Math.cos((b.lat * Math.PI) / 180) *
-      sinLng * sinLng;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(h));
 }
 
+function toRad(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+// ─── Formatting ───────────────────────────────────────────────────────────────
+
 /**
- * Human-readable distance label. e.g. "0.8 km" or "12.4 km"
+ * Human-readable distance string.
+ *   < 1 km  → "850 m"
+ *   ≥ 1 km  → "3.2 km"
  */
 export function formatDistance(km: number): string {
   if (km < 1) return `${Math.round(km * 1000)} m`;
   return `${km.toFixed(1)} km`;
 }
 
+// ─── Scoring ──────────────────────────────────────────────────────────────────
+
 /**
- * Proximity score 0–100: 0 km → 100, ≥20 km → 0. Linear decay.
+ * Proximity score 0–100 for use in the allocation formula.
+ *   ≤ 2 km   → 90–100
+ *   2–5 km   → 60–90
+ *   5–10 km  → 30–60
+ *   > 10 km  → 0–30
  */
 export function proximityScore(km: number): number {
-  return Math.max(0, Math.round(100 - km * 5));
-}
-
-// ─── Browser Geolocation ──────────────────────────────────────────────────────
-
-export interface GeolocationResult {
-  coords?: GeoCoords;
-  status: LocationStatus;
-  error?: string;
+  if (km <= 0)  return 100;
+  if (km <= 2)  return Math.round(100 - (km / 2) * 10);
+  if (km <= 5)  return Math.round(90  - ((km - 2) / 3) * 30);
+  if (km <= 10) return Math.round(60  - ((km - 5) / 5) * 30);
+  return Math.max(0, Math.round(30 - (km - 10) * 2));
 }
 
 /**
- * Wraps browser geolocation in a Promise.
- * Resolves with coords on success, rejects with a user-friendly error.
+ * Combined suitability score (0–100).
+ * Weights: skill 30 %, reliability 25 %, availability 15 %, proximity 30 %
+ */
+export function suitabilityScore(opts: {
+  skill: number;        // 0–100
+  reliability: number;  // 0–100
+  availability: number; // 0–100  (100 = available, 0 = not)
+  distanceKm: number;
+}): number {
+  const p = proximityScore(opts.distanceKm);
+  return Math.round(
+    opts.skill        * 0.30 +
+    opts.reliability  * 0.25 +
+    opts.availability * 0.15 +
+    p                 * 0.30,
+  );
+}
+
+/**
+ * Returns true when the volunteer has moved more than `thresholdM` metres
+ * since the last recorded position — used to decide whether to re-upload.
+ */
+export function movedBeyondThreshold(
+  prev: LatLng,
+  next: LatLng,
+  thresholdM = 200,
+): boolean {
+  return getDistanceKm(prev, next) * 1000 > thresholdM;
+}
+
+// ─── Browser Geolocation wrapper ─────────────────────────────────────────────
+
+/**
+ * Promise-based wrapper around the browser Geolocation API.
+ * Rejects with a descriptive Error on denial or timeout.
  */
 export function getCurrentPosition(
-  options: PositionOptions = { enableHighAccuracy: true, timeout: 10_000, maximumAge: 60_000 }
+  options: PositionOptions = { enableHighAccuracy: true, timeout: 10_000 },
 ): Promise<GeoCoords> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -63,33 +109,48 @@ export function getCurrentPosition(
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      (err) => {
-        const messages: Record<number, string> = {
-          1: 'Location permission denied. Please enable it in your browser settings.',
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      err => {
+        const msgs: Record<number, string> = {
+          1: 'Location permission denied. Please allow access in your browser settings.',
           2: 'Location unavailable. Try again in a moment.',
-          3: 'Location request timed out. Check your connection and try again.',
+          3: 'Location request timed out. Check your connection.',
         };
-        reject(new Error(messages[err.code] ?? 'Unknown location error.'));
+        reject(new Error(msgs[err.code] ?? 'Unknown geolocation error.'));
       },
-      options
+      options,
     );
   });
 }
 
-// ─── Reverse Geocoding (OpenStreetMap Nominatim — free, no key) ───────────────
+// ─── Reverse geocoding (Nominatim, no API key needed) ────────────────────────
 
+/**
+ * Returns a short human-readable address for a lat/lng pair.
+ * Falls back gracefully to coordinate string if the request fails.
+ */
 export async function reverseGeocode(coords: GeoCoords): Promise<string> {
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lng}&format=json`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
-    if (!res.ok) throw new Error('Geocode failed');
-    const data = await res.json();
-    const { suburb, city_district, city, town, state_district, state } = data.address ?? {};
-    // Return a short neighbourhood + city string
-    const area = suburb ?? city_district ?? town ?? '';
-    const cityName = city ?? state_district ?? state ?? '';
-    return [area, cityName].filter(Boolean).join(', ') || data.display_name?.split(',').slice(0, 2).join(', ') || 'Unknown location';
+    const url =
+      `https://nominatim.openstreetmap.org/reverse` +
+      `?lat=${coords.lat}&lon=${coords.lng}&format=json&zoom=14`;
+    const res = await fetch(url, {
+      headers: { 'Accept-Language': 'en', 'User-Agent': 'VolunteerApp/1.0' },
+    });
+    if (!res.ok) throw new Error('Nominatim request failed');
+    const data = await res.json() as {
+      address?: {
+        suburb?: string; neighbourhood?: string; city?: string;
+        town?: string; village?: string; state?: string; country?: string;
+      };
+      display_name?: string;
+    };
+    const a = data.address ?? {};
+    const locality = a.suburb ?? a.neighbourhood ?? a.city ?? a.town ?? a.village ?? '';
+    const city     = (!locality || locality === a.city) ? '' : (a.city ?? a.town ?? '');
+    const state    = a.state ?? '';
+    const parts    = [locality, city, state].filter(Boolean);
+    return parts.length ? parts.join(', ') : (data.display_name ?? `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`);
   } catch {
     return `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
   }

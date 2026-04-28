@@ -1,5 +1,12 @@
-import { useState, useEffect } from 'react';
-import { MapPin, Navigation, RefreshCw, CheckCircle2, AlertCircle, Loader2, X } from 'lucide-react';
+// ─── LocationSection.tsx ──────────────────────────────────────────────────────
+// Settings card: captures, persists, and Firestore-syncs the volunteer's
+// location. Uses movedBeyondThreshold (200 m) to avoid redundant uploads.
+
+import { useState, useEffect, useRef } from 'react';
+import {
+  MapPin, Navigation, RefreshCw, CheckCircle2,
+  AlertCircle, Loader2, X,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -9,23 +16,24 @@ import { Button } from '../../components/common/Button';
 import {
   getCurrentPosition,
   reverseGeocode,
+  movedBeyondThreshold,
   type GeoCoords,
   type LocationStatus,
 } from '../../lib/locationUtils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface SavedLocation {
+export interface SavedLocation {
   coords: GeoCoords;
   label: string;
   savedAt: number; // epoch ms
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Storage helpers ──────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'volunteer_location_v1';
 
-const loadSaved = (): SavedLocation | null => {
+export const loadSavedLocation = (): SavedLocation | null => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as SavedLocation) : null;
@@ -38,22 +46,44 @@ const persistLocal = (loc: SavedLocation) => {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(loc)); } catch { /* ignore */ }
 };
 
+const clearLocal = () => {
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+};
+
 const timeAgo = (ms: number): string => {
   const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min ago`;
+  if (diff < 60_000)     return 'just now';
+  if (diff < 3_600_000)  return `${Math.floor(diff / 60_000)} min ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} hr ago`;
   return `${Math.floor(diff / 86_400_000)} day(s) ago`;
 };
 
-// ─── LocationSection ──────────────────────────────────────────────────────────
+// ─── Firestore writer ─────────────────────────────────────────────────────────
 
-interface LocationSectionProps {
-  /** Firestore user document ID (uid). Pass null if not yet available. */
-  userId?: string | null;
+async function syncToFirestore(uid: string, coords: GeoCoords, label: string): Promise<void> {
+  await updateDoc(doc(db, 'volunteers', uid), {
+    location: { lat: coords.lat, lng: coords.lng },
+    locationLabel: label,
+    locationUpdatedAt: new Date().toISOString(),
+  });
 }
 
-export const LocationSection = ({ userId }: LocationSectionProps) => {
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+interface LocationSectionProps {
+  /** Firestore volunteer document ID. Falls back to auth profile uid if omitted. */
+  userId?: string | null;
+  /**
+   * Called whenever a new location is successfully captured.
+   * Use this to update the parent's volunteer-coords state so proximity
+   * alerts can react immediately without re-reading localStorage.
+   */
+  onLocationChange?: (coords: GeoCoords, label: string) => void;
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export const LocationSection = ({ userId, onLocationChange }: LocationSectionProps) => {
   const { profile } = useAuth();
   const uid = userId ?? profile?.uid ?? null;
 
@@ -61,43 +91,51 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
   const [status, setStatus] = useState<LocationStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load from localStorage on mount
-  useEffect(() => { setSaved(loadSaved()); }, []);
+  // Hydrate from localStorage on mount
+  useEffect(() => {
+    setSaved(loadSavedLocation());
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3000);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3_000);
   };
 
-  // ── Core handler ─────────────────────────────────────────────────────────────
+  // ── Core capture handler ─────────────────────────────────────────────────────
+
   const handleCapture = async () => {
     setStatus('requesting');
     setError(null);
 
     try {
       const coords = await getCurrentPosition();
-      const label = await reverseGeocode(coords);
 
+      // Throttle: skip Firestore write if volunteer hasn't moved 200 m
+      const prevCoords = saved?.coords ?? null;
+      const hasMoved = !prevCoords || movedBeyondThreshold(prevCoords, coords, 200);
+
+      const label = await reverseGeocode(coords);
       const entry: SavedLocation = { coords, label, savedAt: Date.now() };
+
       setSaved(entry);
       persistLocal(entry);
       setStatus('granted');
+      onLocationChange?.(coords, label);
 
-      // Write to Firestore if we have a uid
-      if (uid) {
+      if (uid && hasMoved) {
         try {
-          await updateDoc(doc(db, 'volunteers', uid), {
-            location: { lat: coords.lat, lng: coords.lng },
-            locationLabel: label,
-            locationUpdatedAt: new Date().toISOString(),
-          });
+          await syncToFirestore(uid, coords, label);
           showToast('Location saved to your profile');
         } catch {
           showToast('Saved locally — cloud sync failed');
         }
+      } else if (!hasMoved) {
+        showToast('Location unchanged (< 200 m from last save)');
       } else {
-        showToast('Location captured (not signed in — local only)');
+        showToast('Location captured (local only)');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not get location.';
@@ -110,28 +148,36 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
     setSaved(null);
     setStatus('idle');
     setError(null);
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    clearLocal();
   };
 
-  // ── Permission explainer ─────────────────────────────────────────────────────
   const isRequesting = status === 'requesting';
 
   return (
     <Card className="p-5 space-y-4">
-      {/* Header */}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">📍 Your Location</p>
-          <p className="text-xs text-brand-text-secondary mt-0.5">Used to match you with nearby tasks</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">
+            📍 Your Location
+          </p>
+          <p className="text-xs text-brand-text-secondary mt-0.5">
+            Used to match you with nearby tasks
+          </p>
         </div>
         {saved && (
-          <button onClick={handleClear} className="p-1.5 rounded-full hover:bg-black/5 transition-colors" aria-label="Clear location">
+          <button
+            onClick={handleClear}
+            className="p-1.5 rounded-full hover:bg-black/5 transition-colors"
+            aria-label="Clear location"
+          >
             <X className="w-3.5 h-3.5 text-brand-text-secondary" />
           </button>
         )}
       </div>
 
-      {/* Saved location display */}
+      {/* ── Saved / Empty state ─────────────────────────────────────────────── */}
       <AnimatePresence mode="wait">
         {saved ? (
           <motion.div
@@ -148,7 +194,9 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
                   <MapPin className="w-4 h-4 text-brand-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-brand-text-primary leading-snug">{saved.label}</p>
+                  <p className="text-sm font-semibold text-brand-text-primary leading-snug">
+                    {saved.label}
+                  </p>
                   <p className="text-[10px] text-brand-text-secondary mt-0.5 font-mono">
                     {saved.coords.lat.toFixed(5)}, {saved.coords.lng.toFixed(5)}
                   </p>
@@ -185,15 +233,16 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
             transition={{ duration: 0.2 }}
             className="space-y-3"
           >
-            {/* Permission explainer */}
+            {/* Privacy explainer */}
             <div className="rounded-xl border border-black/8 bg-brand-background px-4 py-3 space-y-1">
               <p className="text-xs font-semibold text-brand-text-primary">Why we need this</p>
               <p className="text-[11px] text-brand-text-secondary leading-relaxed">
-                We use your location only to calculate how close you are to each task — never for tracking. You can remove it any time.
+                We use your location only to calculate how close you are to each task — never for tracking.
+                You can remove it any time.
               </p>
             </div>
 
-            {/* CTA button */}
+            {/* CTA */}
             <Button
               className="w-full gap-2 text-sm"
               onClick={handleCapture}
@@ -208,7 +257,7 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
         )}
       </AnimatePresence>
 
-      {/* Error state */}
+      {/* ── Error ──────────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {error && (
           <motion.div
@@ -226,7 +275,7 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
         )}
       </AnimatePresence>
 
-      {/* Toast */}
+      {/* ── Toast ──────────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -243,5 +292,3 @@ export const LocationSection = ({ userId }: LocationSectionProps) => {
     </Card>
   );
 };
-
-export type { SavedLocation };
