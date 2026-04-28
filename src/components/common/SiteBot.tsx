@@ -60,11 +60,11 @@ async function askGroq(history: Message[], userText: string): Promise<string> {
       Authorization: `Bearer ${GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
-      max_tokens: 300,
-      temperature: 0.6,
-      messages,
-    }),
+  model: 'meta-llama/llama-4-scout-17b-16e-instruct', // ← updated
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: prompt }],
+  temperature: 0.2,
+}),
   });
 
   if (!res.ok) throw new Error('Groq error');
