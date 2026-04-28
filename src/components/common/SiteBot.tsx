@@ -5,6 +5,7 @@ import { MessageCircle, X, Send, Loader2, Bot } from 'lucide-react';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Message {
+  id: string;
   role: 'user' | 'bot';
   text: string;
 }
@@ -44,47 +45,119 @@ Behaviour rules:
 
 // ─── Groq call ────────────────────────────────────────────────────────────────
 
-async function callGrokForAllocation(
-  tasks: { title: string; impact: number }[],
-  volunteers: Volunteer[],
-): Promise<GrokAllocationResult[]> {
-  const available = volunteers.filter(v => v.available);
+// FIX #2: API key should NOT be used directly from the client in production.
+// Route this through your own backend endpoint to avoid exposing the key.
+// e.g. replace the fetch URL with '/api/chat' and handle the Groq call server-side.
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string;
 
-  const score = (v: Volunteer, impact: number) =>
-    (impact / 100) * 0.3 +
-    (v.skill / 100) * 0.3 +
-    (v.reliability / 100) * 0.25 +
-    (1 - Math.min(v.distanceKm, 20) / 20) * 0.15;
+async function askGroq(history: Message[], userText: string): Promise<string> {
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.map(m => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: m.text })),
+    { role: 'user', content: userText },
+  ];
 
-  const assigned = new Set<string>();
-  const results: GrokAllocationResult[] = [];
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 300,
+      temperature: 0.6,
+      messages,
+    }),
+  });
 
-  // Sort tasks by impact descending so high-impact gets first pick
-  const sorted = [...tasks].sort((a, b) => b.impact - a.impact);
-
-  for (const task of sorted) {
-    const ranked = [...available]
-      .sort((a, b) => score(b, task.impact) - score(a, task.impact));
-
-    const primary = ranked.find(v => !assigned.has(v.name));
-    if (!primary) continue;
-
-    assigned.add(primary.name);
-
-    const backups = ranked
-      .filter(v => v.name !== primary.name)
-      .map(v => v.name);
-
-    results.push({
-      task: task.title,
-      primaryVolunteer: primary.name,
-      reasoning: `Best score on skill (${primary.skill}%), reliability (${primary.reliability}%), and distance (${primary.distanceKm}km).`,
-      rankedVolunteers: backups,
-    });
-  }
-
-  return results;
+  if (!res.ok) throw new Error('Groq error');
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? 'Sorry, I could not get a response.';
 }
+
+// ─── Quick replies ────────────────────────────────────────────────────────────
+
+const QUICK_REPLIES = [
+  'How does task allocation work?',
+  'What are the volunteer badges?',
+  'How is my score calculated?',
+  'How do I update my location?',
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const makeId = () => crypto.randomUUID();
+
+// ─── SiteBot ──────────────────────────────────────────────────────────────────
+
+export const SiteBot = () => {
+  const [isOpen, setIsOpen]               = useState(false);
+  const [input, setInput]                 = useState('');
+  const [loading, setLoading]             = useState(false);
+  // FIX #4: explicit flag instead of relying on message count
+  const [quickRepliesUsed, setQuickRepliesUsed] = useState(false);
+  const [messages, setMessages]           = useState<Message[]>([
+    {
+      id: makeId(),
+      role: 'bot',
+      text: "Hey! I'm the ALIGN Assistant. Ask me anything about the platform, your tasks, or just say hi 👋",
+    },
+  ]);
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll on new message
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  // Focus input when opened
+  useEffect(() => {
+    if (isOpen) setTimeout(() => inputRef.current?.focus(), 150);
+  }, [isOpen]);
+
+  const send = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+
+    // FIX #1: snapshot the current history + new user message BEFORE setState
+    // so the correct full history is passed to askGroq without stale closure issues
+    const userMsg: Message = { id: makeId(), role: 'user', text: trimmed };
+    const updatedMessages = [...messages, userMsg];
+
+    setMessages(updatedMessages);
+    setInput('');
+    setLoading(true);
+    setQuickRepliesUsed(true); // FIX #4
+
+    try {
+      // Pass updatedMessages (includes the user msg) as history
+      const reply = await askGroq(updatedMessages, trimmed);
+      setMessages(prev => [...prev, { id: makeId(), role: 'bot', text: reply }]);
+    } catch {
+      setMessages(prev => [
+        ...prev,
+        { id: makeId(), role: 'bot', text: 'Something went wrong. Please try again.' },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send(input);
+    }
+  };
+
+  const showQuickReplies = !quickRepliesUsed && !loading; // FIX #4
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+
       {/* ── Chat panel ─────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {isOpen && (
@@ -120,9 +193,10 @@ async function callGrokForAllocation(
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-brand-background/20">
-              {messages.map((msg, idx) => (
+              {messages.map(msg => (
+                // FIX #3: use stable msg.id instead of array index as key
                 <motion.div
-                  key={idx}
+                  key={msg.id}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.18 }}
@@ -169,7 +243,7 @@ async function callGrokForAllocation(
               )}
 
               {/* Quick replies */}
-              {showQuickReplies && !loading && (
+              {showQuickReplies && (
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {QUICK_REPLIES.map(q => (
                     <button
