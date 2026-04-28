@@ -11,6 +11,8 @@ import { Button } from '../../components/common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { logOut } from '../../lib/authService';
 import { useNavigate } from 'react-router-dom';
+import { LocationSection } from './LocationSection';
+import { getDistanceKm, formatDistance } from '../../lib/locationUtils';
 import {
   collection,
   getDocs,
@@ -591,12 +593,16 @@ const SettingsPage = ({ displayName }: { displayName: string }) => {
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
   return (
     <div className="space-y-4">
+
+      {/* ── NEW: geolocation card ── */}
+      <LocationSection />
+
       <Card className="p-5 space-y-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Profile</p>
         {[
           { label: 'Full Name', value: name, set: setName, type: 'text', ph: 'Your name' },
           { label: 'Phone', value: phone, set: setPhone, type: 'tel', ph: '+91 9876543210' },
-          { label: 'Location', value: location, set: setLocation, type: 'text', ph: 'Chennai, TN' },
+          { label: 'Location (City)', value: location, set: setLocation, type: 'text', ph: 'Chennai, TN' },
         ].map(f => (
           <div key={f.label} className="space-y-1">
             <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">{f.label}</label>
@@ -640,7 +646,6 @@ const SettingsPage = ({ displayName }: { displayName: string }) => {
     </div>
   );
 };
-
 // ─── Nav config ───────────────────────────────────────────────────────────────
 
 const NAV = [

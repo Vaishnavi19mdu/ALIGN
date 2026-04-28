@@ -4,7 +4,7 @@ import {
   LayoutDashboard, ClipboardList, GitBranch, Users, BarChart2,
   ScrollText, FileDown, Sparkles, Plus, ToggleLeft, ToggleRight,
   Download, LogOut, X, Settings, CheckCircle2, Save, Wifi, WifiOff,
-  UserCheck, Bell, ChevronDown, Loader2, AlertCircle,
+  UserCheck, Bell, ChevronDown, Loader2, AlertCircle, MapPin, Navigation,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import {
@@ -611,9 +611,260 @@ const TaskPermissionsPanel = ({ orgCode }: { orgCode: string }) => {
   );
 };
 
+// ─── Create Task Modal (Admin) ────────────────────────────────────────────────
+
+interface AdminCreateTaskForm {
+  title: string;
+  description: string;
+  priority: 'Low' | 'Medium' | 'High' | 'Emergency';
+  category: string;
+  deadline: string;
+  location: string;
+  lat: number | null;
+  lng: number | null;
+}
+
+const AdminCreateTaskModal = ({
+  onClose,
+  orgCode,
+  adminName,
+}: {
+  onClose: () => void;
+  orgCode: string;
+  adminName: string;
+}) => {
+  const [form, setForm] = useState<AdminCreateTaskForm>({
+    title: '', description: '', priority: 'Medium',
+    category: '', deadline: '', location: '', lat: null, lng: null,
+  });
+  const [saving, setSaving] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState('');
+  const [locLoading, setLocLoading] = useState(false);
+  const [locStatus, setLocStatus] = useState<'idle' | 'granted' | 'denied'>('idle');
+
+  const set = (field: keyof AdminCreateTaskForm, val: string | number | null) =>
+    setForm(prev => ({ ...prev, [field]: val }));
+
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) { setError('Geolocation not supported.'); return; }
+    setLocLoading(true);
+    setLocStatus('idle');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+            { headers: { 'Accept-Language': 'en' } }
+          );
+          const data = await res.json();
+          const { suburb, city_district, city, town, state } = data.address ?? {};
+          const label = [suburb ?? city_district ?? town, city ?? state]
+            .filter(Boolean).join(', ') || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+          setForm(prev => ({ ...prev, location: label, lat, lng }));
+          setLocStatus('granted');
+        } catch {
+          setForm(prev => ({ ...prev, location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng }));
+          setLocStatus('granted');
+        }
+        setLocLoading(false);
+      },
+      (err) => {
+        setLocStatus('denied');
+        setLocLoading(false);
+        setError(err.code === 1
+          ? 'Location permission denied. Enable it in browser settings.'
+          : 'Could not get location. Try again.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const handleSubmit = async () => {
+    if (!form.title.trim()) { setError('Task title is required.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      await addDoc(collection(db, 'tasks'), {
+        title:       form.title.trim(),
+        description: form.description.trim(),
+        priority:    form.priority,
+        category:    form.category.trim(),
+        deadline:    form.deadline,
+        location:    form.location.trim(),
+        ...(form.lat !== null && form.lng !== null
+          ? { coords: { lat: form.lat, lng: form.lng } }
+          : {}),
+        status:     'Open',
+        createdBy:  adminName,
+        orgCode,
+        assignedTo: 'Unassigned',
+        createdAt:  serverTimestamp(),
+      });
+      setDone(true);
+      setTimeout(onClose, 1400);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to create task.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose}
+      >
+        <motion.div
+          className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+          initial={{ scale: 0.94, opacity: 0, y: 24 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.94, opacity: 0, y: 24 }}
+          transition={{ type: 'spring', stiffness: 340, damping: 30 }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between px-5 py-4 border-b border-black/5 bg-brand-primary">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">Admin · New Task</p>
+              <h2 className="text-base font-heading font-bold text-white">Create Task</h2>
+            </div>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 transition-colors text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {done ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-14">
+              <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center">
+                <CheckCircle2 className="w-7 h-7 text-green-500" />
+              </div>
+              <p className="font-bold text-brand-text-primary">Task created!</p>
+              <p className="text-xs text-brand-text-secondary">Added to the task pool.</p>
+            </div>
+          ) : (
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {error && (
+                <div className="flex items-center gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">
+                  Task Title <span className="text-red-400">*</span>
+                </label>
+                <input value={form.title} onChange={e => set('title', e.target.value)}
+                  placeholder="e.g. Food Kit Distribution"
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background" />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Description</label>
+                <textarea value={form.description} onChange={e => set('description', e.target.value)}
+                  placeholder="What needs to be done?"
+                  rows={3}
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background resize-none" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Priority</label>
+                  <select value={form.priority} onChange={e => set('priority', e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background">
+                    {(['Low', 'Medium', 'High', 'Emergency'] as const).map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Category</label>
+                  <input value={form.category} onChange={e => set('category', e.target.value)}
+                    placeholder="e.g. Medical, Relief…"
+                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background" />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Deadline</label>
+                <input type="date" value={form.deadline} onChange={e => set('deadline', e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background" />
+              </div>
+
+              {/* ── Location + Geotag ── */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Task Location</label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-primary pointer-events-none" />
+                  <input
+                    value={form.location}
+                    onChange={e => setForm(prev => ({ ...prev, location: e.target.value, lat: null, lng: null }))}
+                    placeholder="e.g. Anna Nagar Community Hall, Chennai"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  disabled={locLoading}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all w-full justify-center disabled:opacity-60
+                    ${locStatus === 'granted'
+                      ? 'bg-green-50 border-green-200 text-green-700'
+                      : locStatus === 'denied'
+                        ? 'bg-red-50 border-red-200 text-red-600'
+                        : 'bg-brand-primary/5 border-brand-primary/20 text-brand-primary hover:bg-brand-primary/10'}`}
+                >
+                  {locLoading ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Getting location…</>
+                  ) : locStatus === 'granted' ? (
+                    <><CheckCircle2 className="w-3.5 h-3.5" /> Geotagged · {form.lat?.toFixed(4)}, {form.lng?.toFixed(4)}</>
+                  ) : locStatus === 'denied' ? (
+                    <><AlertCircle className="w-3.5 h-3.5" /> Permission denied — type manually</>
+                  ) : (
+                    <><Navigation className="w-3.5 h-3.5" /> Use Current Location (Geotag)</>
+                  )}
+                </button>
+                {locStatus === 'granted' && (
+                  <p className="text-[10px] text-brand-text-secondary flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-brand-primary" />
+                    Coordinates saved — volunteers nearby will be prioritised
+                  </p>
+                )}
+              </div>
+
+              {/* ── Nearby volunteers nudge ── */}
+              {locStatus === 'granted' && form.lat !== null && (
+                <div className="bg-brand-primary/5 border border-brand-primary/15 rounded-xl px-4 py-3 space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-brand-primary flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3" /> Proximity Matching Active
+                  </p>
+                  <p className="text-[11px] text-brand-text-secondary leading-relaxed">
+                    Active volunteers near this location will be ranked higher by the allocation engine when this task is auto-assigned.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <Button variant="ghost" size="sm" onClick={onClose} className="flex-1">Cancel</Button>
+                <Button size="sm" onClick={handleSubmit} disabled={saving} className="flex-1 gap-1.5">
+                  {saving
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                    : <><Plus className="w-3.5 h-3.5" /> Create Task</>}
+                </Button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 // ─── Sub-pages ─────────────────────────────────────────────────────────────────
 
-const DashboardHome = () => (
+const DashboardHome = ({ onCreateTask }: { onCreateTask: () => void }) => (
   <div className="space-y-6">
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       {kpis.map((k, i) => (
@@ -629,8 +880,12 @@ const DashboardHome = () => (
     <div className="flex items-center justify-between">
       <h2 className="text-base font-heading font-bold">Urgent Unassigned Tasks</h2>
       <div className="flex gap-2">
-        <Button size="sm" variant="ghost" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Plus className="w-3 h-3" /> Create Task</Button>
-        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest"><Sparkles className="w-3 h-3" /> Auto Assign</Button>
+        <Button size="sm" variant="ghost" onClick={onCreateTask} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+          <Plus className="w-3 h-3" /> Create Task
+        </Button>
+        <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+          <Sparkles className="w-3 h-3" /> Auto Assign
+        </Button>
       </div>
     </div>
     <Card className="overflow-hidden">
@@ -663,7 +918,7 @@ const DashboardHome = () => (
 
 // ─── Tasks Page ───────────────────────────────────────────────────────────────
 
-const TasksPage = ({ orgCode }: { orgCode: string }) => {
+const TasksPage = ({ orgCode, onCreateTask }: { orgCode: string; onCreateTask: () => void }) => {
   const [showPermissions, setShowPermissions] = useState(false);
   return (
     <div className="space-y-6">
@@ -676,7 +931,7 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
               className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
               <ToggleRight className="w-3.5 h-3.5" /> Task Permissions
             </Button>
-            <Button size="sm" className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
+            <Button size="sm" onClick={onCreateTask} className="gap-1.5 text-[10px] uppercase font-bold tracking-widest">
               <Plus className="w-3 h-3" /> Create Task
             </Button>
           </div>
@@ -718,7 +973,7 @@ const TasksPage = ({ orgCode }: { orgCode: string }) => {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-heading font-bold text-brand-text-primary">Task Creation Permissions</h3>
-                  <p className="text-[11px] text-brand-text-secondary mt-0.5">Toggle which staff members can create new tasks in your organisation.</p>
+                  <p className="text-[11px] text-brand-text-secondary mt-0.5">Toggle which staff members can create new tasks.</p>
                 </div>
                 <button onClick={() => setShowPermissions(false)}
                   className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 transition-colors text-brand-text-secondary">
@@ -804,7 +1059,6 @@ const AllocationPage = () => {
   const [reasoningMap, setReasoningMap] = useState<Record<string, string>>({});
   const [suggestingFor, setSuggestingFor] = useState<string | null>(null);
 
-  // ── Bulk re-allocation via Grok ─────────────────────────────────────────────
   const runAutoAssign = async () => {
     setRunning(true);
     setGrokError(null);
@@ -832,7 +1086,6 @@ const AllocationPage = () => {
     }
   };
 
-  // ── AI-suggest backups for a single task ────────────────────────────────────
   const suggestBackups = async (row: AllocationRow) => {
     setSuggestingFor(row.task);
     setGrokError(null);
@@ -1117,16 +1370,33 @@ const AnalyticsPage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="p-5">
           <p className="text-xs font-bold uppercase tracking-widest text-brand-text-secondary mb-4">Task Completion Rate — This Week</p>
-          <div className="flex items-end gap-2 h-36">
-            {analyticsCompletion.map((d, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <span className="text-[10px] font-bold text-brand-primary">{d.val}%</span>
-                <motion.div className="w-full bg-brand-primary/80 rounded-t-md" style={{ height: 0 }}
-                  animate={{ height: `${(d.val / maxBar) * 100}%` }} transition={{ delay: i * 0.05, duration: 0.5, ease: 'easeOut' }} />
-                <span className="text-[10px] text-brand-text-secondary">{d.label}</span>
+          {(() => {
+            const BAR_MAX_PX = 112; // px, matches roughly h-36 minus label rows
+            return (
+              <div className="flex items-end gap-1.5" style={{ height: BAR_MAX_PX + 36 }}>
+                {analyticsCompletion.map((d, i) => {
+                  const barH = Math.round((d.val / maxBar) * BAR_MAX_PX);
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-1" style={{ height: BAR_MAX_PX + 36 }}>
+                      {/* value label — always at top, pushes bar down via mt-auto on bar */}
+                      <span className="text-[10px] font-bold text-brand-primary leading-none">{d.val}%</span>
+                      {/* spacer that grows so bar stays bottom-aligned */}
+                      <div className="flex-1" />
+                      {/* bar */}
+                      <motion.div
+                        className="w-full bg-brand-primary/80 rounded-t-md"
+                        initial={{ height: 0 }}
+                        animate={{ height: barH }}
+                        transition={{ delay: i * 0.05, duration: 0.5, ease: 'easeOut' }}
+                      />
+                      {/* day label */}
+                      <span className="text-[10px] text-brand-text-secondary leading-none mt-1">{d.label}</span>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </Card>
         <Card className="p-5">
           <p className="text-xs font-bold uppercase tracking-widest text-brand-text-secondary mb-4">Volunteer Activity by Category</p>
@@ -1354,6 +1624,10 @@ export const OrgAdminDashboard = () => {
   const navigate = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
 
+  // PATCH 5 — modal state
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const openCreateTask = () => setShowCreateModal(true);
+
   useEffect(() => {
     const orgCode = profile?.orgCode;
     if (!orgCode) return;
@@ -1372,9 +1646,10 @@ export const OrgAdminDashboard = () => {
 
   const handleLogout = async () => { await logOut(); navigate('/login'); };
 
+  // PATCH 5 — updated PageMap wiring onCreateTask into DashboardHome and TasksPage
   const PageMap: Record<NavKey, ReactElement> = {
-    dashboard:  <DashboardHome />,
-    tasks:      <TasksPage orgCode={orgCode} />,
+    dashboard:  <DashboardHome onCreateTask={openCreateTask} />,
+    tasks:      <TasksPage orgCode={orgCode} onCreateTask={openCreateTask} />,
     allocation: <AllocationPage />,
     staff:      <StaffManagementPage orgCode={orgCode} />,
     requests:   <StaffRequestsPage orgCode={orgCode} />,
@@ -1487,6 +1762,15 @@ export const OrgAdminDashboard = () => {
           </div>
         </main>
       </div>
+
+      {/* PATCH 5 — Create Task Modal rendered at root level */}
+      {showCreateModal && (
+        <AdminCreateTaskModal
+          onClose={() => setShowCreateModal(false)}
+          orgCode={orgCode}
+          adminName={displayName}
+        />
+      )}
     </>
   );
 };

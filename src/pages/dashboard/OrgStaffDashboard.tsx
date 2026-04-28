@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, CheckSquare, MessageSquare, BookOpen,
   CheckCircle2, XCircle, Star, Send, Plus, LogOut, ShieldCheck, ShieldOff,
-  Loader2, X, AlertCircle, FileDown,
+  Loader2, X, AlertCircle, FileDown, MapPin, Navigation,
 } from 'lucide-react';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -22,6 +22,9 @@ interface CreateTaskForm {
   priority: 'Low' | 'Medium' | 'High' | 'Emergency';
   category: string;
   deadline: string;
+  location: string;
+  lat: number | null;
+  lng: number | null;
 }
 
 // ─── Dummy data ────────────────────────────────────────────────────────────────
@@ -111,13 +114,57 @@ const CreateTaskModal = ({
     priority: 'Medium',
     category: '',
     deadline: '',
+    location: '',
+    lat: null,
+    lng: null,
   });
   const [saving, setSaving] = useState(false);
-  const [done,   setDone]   = useState(false);
-  const [error,  setError]  = useState('');
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState('');
+  const [locLoading, setLocLoading] = useState(false);
+  const [locStatus, setLocStatus] = useState<'idle' | 'granted' | 'denied'>('idle');
 
-  const set = (field: keyof CreateTaskForm, val: string) =>
+  const set = (field: keyof CreateTaskForm, val: string | number | null) =>
     setForm(prev => ({ ...prev, [field]: val }));
+
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setError('Geolocation is not supported by your browser.');
+      return;
+    }
+    setLocLoading(true);
+    setLocStatus('idle');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        // Reverse geocode with OpenStreetMap (free, no key)
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+            { headers: { 'Accept-Language': 'en' } }
+          );
+          const data = await res.json();
+          const { suburb, city_district, city, town, state } = data.address ?? {};
+          const label = [suburb ?? city_district ?? town, city ?? state]
+            .filter(Boolean).join(', ') || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+          setForm(prev => ({ ...prev, location: label, lat, lng }));
+          setLocStatus('granted');
+        } catch {
+          setForm(prev => ({ ...prev, location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng }));
+          setLocStatus('granted');
+        }
+        setLocLoading(false);
+      },
+      (err) => {
+        setLocStatus('denied');
+        setLocLoading(false);
+        if (err.code === 1) setError('Location permission denied. Enable it in browser settings.');
+        else setError('Could not get location. Try again.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   const handleSubmit = async () => {
     if (!form.title.trim()) { setError('Task title is required.'); return; }
@@ -125,16 +172,21 @@ const CreateTaskModal = ({
     setError('');
     try {
       await addDoc(collection(db, 'tasks'), {
-        title: form.title.trim(),
+        title:       form.title.trim(),
         description: form.description.trim(),
-        priority: form.priority,
-        category: form.category.trim(),
-        deadline: form.deadline,
-        status: 'Open',
-        createdBy: staffName,
+        priority:    form.priority,
+        category:    form.category.trim(),
+        deadline:    form.deadline,
+        location:    form.location.trim(),
+        // Store coords if captured — used for proximity matching
+        ...(form.lat !== null && form.lng !== null
+          ? { coords: { lat: form.lat, lng: form.lng } }
+          : {}),
+        status:     'Open',
+        createdBy:  staffName,
         orgCode,
         assignedTo: 'Unassigned',
-        createdAt: serverTimestamp(),
+        createdAt:  serverTimestamp(),
       });
       setDone(true);
       setTimeout(onClose, 1400);
@@ -159,6 +211,7 @@ const CreateTaskModal = ({
           transition={{ type: 'spring', stiffness: 340, damping: 30 }}
           onClick={e => e.stopPropagation()}
         >
+          {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-black/5 bg-brand-primary">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">New Task</p>
@@ -179,12 +232,14 @@ const CreateTaskModal = ({
               <p className="text-xs text-brand-text-secondary">It has been added to the task pool.</p>
             </div>
           ) : (
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
               {error && (
                 <div className="flex items-center gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
                 </div>
               )}
+
+              {/* Title */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">
                   Task Title <span className="text-red-400">*</span>
@@ -193,9 +248,11 @@ const CreateTaskModal = ({
                   value={form.title}
                   onChange={e => set('title', e.target.value)}
                   placeholder="e.g. Community Health Camp Setup"
-                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
                 />
               </div>
+
+              {/* Description */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Description</label>
                 <textarea
@@ -203,16 +260,18 @@ const CreateTaskModal = ({
                   onChange={e => set('description', e.target.value)}
                   placeholder="What needs to be done? Add any relevant details…"
                   rows={3}
-                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors resize-none"
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background resize-none"
                 />
               </div>
+
+              {/* Priority + Category */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Priority</label>
                   <select
                     value={form.priority}
                     onChange={e => set('priority', e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
+                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
                   >
                     {(['Low', 'Medium', 'High', 'Emergency'] as const).map(p => (
                       <option key={p} value={p}>{p}</option>
@@ -225,23 +284,81 @@ const CreateTaskModal = ({
                     value={form.category}
                     onChange={e => set('category', e.target.value)}
                     placeholder="e.g. Medical, Relief…"
-                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
+                    className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
                   />
                 </div>
               </div>
+
+              {/* Deadline */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">Deadline</label>
                 <input
                   type="date"
                   value={form.deadline}
                   onChange={e => set('deadline', e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background transition-colors"
+                  className="w-full px-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
                 />
               </div>
+
+              {/* ── Location field (NEW) ── */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-brand-text-secondary">
+                  Task Location
+                </label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-primary pointer-events-none" />
+                  <input
+                    value={form.location}
+                    onChange={e => {
+                      set('location', e.target.value);
+                      // If user types manually, clear coords
+                      setForm(prev => ({ ...prev, location: e.target.value, lat: null, lng: null }));
+                      setLocStatus('idle');
+                    }}
+                    placeholder="e.g. Anna Nagar Community Hall, Chennai"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-black/10 focus:border-brand-primary outline-none text-sm bg-brand-background"
+                  />
+                </div>
+
+                {/* Geotag button */}
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  disabled={locLoading}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all w-full justify-center
+                    ${locStatus === 'granted'
+                      ? 'bg-green-50 border-green-200 text-green-700'
+                      : locStatus === 'denied'
+                        ? 'bg-red-50 border-red-200 text-red-600'
+                        : 'bg-brand-primary/5 border-brand-primary/20 text-brand-primary hover:bg-brand-primary/10'
+                    } disabled:opacity-60`}
+                >
+                  {locLoading ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Getting location…</>
+                  ) : locStatus === 'granted' ? (
+                    <><CheckCircle2 className="w-3.5 h-3.5" /> Geotagged · {form.lat?.toFixed(4)}, {form.lng?.toFixed(4)}</>
+                  ) : locStatus === 'denied' ? (
+                    <><AlertCircle className="w-3.5 h-3.5" /> Permission denied — type location manually</>
+                  ) : (
+                    <><Navigation className="w-3.5 h-3.5" /> Use Current Location (Geotag)</>
+                  )}
+                </button>
+
+                {locStatus === 'granted' && (
+                  <p className="text-[10px] text-brand-text-secondary flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-brand-primary" />
+                    Coordinates saved — volunteers will see real distance to this task
+                  </p>
+                )}
+              </div>
+
+              {/* Actions */}
               <div className="flex gap-3 pt-1">
                 <Button variant="ghost" size="sm" onClick={onClose} className="flex-1">Cancel</Button>
                 <Button size="sm" onClick={handleSubmit} disabled={saving} className="flex-1 gap-1.5">
-                  {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : <><Plus className="w-3.5 h-3.5" /> Create Task</>}
+                  {saving
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                    : <><Plus className="w-3.5 h-3.5" /> Create Task</>}
                 </Button>
               </div>
             </div>
